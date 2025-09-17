@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Twitch Tab Manager</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <h2>Twitch Tab Manager</h2>
+
+  <label class="switch">
+    <input type="checkbox" id="toggleManager">
+    <span class="slider"></span>
+  </label>
+  <p id="statusText">Extension is <strong>off</strong></p>
+
+  <div class="btns">
+    <button id="btnPoll">Force Poll</button>
+    <button id="btnReload">Reload Config</button>
+  </div>
+
+  <p class="hint">Tip: edit <code>follows.txt</code> & <code>config.json</code> then “Reload”.</p>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

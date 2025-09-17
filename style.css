@@ -1,0 +1,13 @@
+body { font-family: system-ui, sans-serif; text-align: center; padding: 12px; width: 220px; }
+h2 { margin: 0 0 8px; font-size: 16px; }
+.switch { position: relative; display: inline-block; width: 60px; height: 34px; margin-top: 8px; }
+.switch input { display: none; }
+.slider { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #ccc; border-radius: 34px; cursor: pointer; transition: .2s; }
+.slider:before { content: ""; position: absolute; height: 26px; width: 26px; left: 4px; bottom: 4px; background: #fff; border-radius: 50%; transition: .2s; }
+input:checked + .slider { background: #9146FF; }
+input:checked + .slider:before { transform: translateX(26px); }
+.btns { margin-top: 10px; display: flex; gap: 8px; justify-content: center; }
+button { padding: 6px 10px; border: 0; border-radius: 8px; background: #eee; cursor: pointer; }
+button:hover { background: #e6e6e6; }
+button:disabled { opacity: .6; cursor: default; }
+.hint { margin-top: 8px; font-size: 12px; color: #666; }

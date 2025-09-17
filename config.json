@@ -1,0 +1,9 @@
+{
+  "client_id": "YOUR_TWITCH_CLIENT_ID",
+  "access_token": "YOUR_APP_ACCESS_TOKEN",
+  "force_unmute": true,
+  "force_resume": true,
+  "check_interval_sec": 60,
+  "unmute_streams": true,
+  "max_tabs": 8
+}
