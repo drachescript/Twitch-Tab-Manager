@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Twitch Tab Manager",
-  "description": "Opens/closes Twitch stream tabs from follows.txt, dedupes, and auto-unmutes/resumes if enabled.",
-  "version": "1.0.1",
+  "description": "Open your followed Twitch streams when they go live—unmute/resume, avoid duplicates, and limit tabs automatically.",
+  "version": "1.0.5",
   "author": "dragonscripts",
   "icons": {
     "16": "icons/icon16.png",
@@ -17,7 +17,8 @@
     "service_worker": "background.js",
     "type": "module"
   },
-  "permissions": ["tabs", "storage", "alarms", "scripting"],
+  "options_page": "options.html",
+  "permissions": ["tabs", "storage", "alarms", "scripting", "downloads"],
   "host_permissions": ["*://www.twitch.tv/*"],
   "web_accessible_resources": [
     { "resources": ["content_unmute.js"], "matches": ["*://www.twitch.tv/*"] }

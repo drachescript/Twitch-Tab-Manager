@@ -5,7 +5,7 @@
   <title>Twitch Tab Manager</title>
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="popup">
   <h2>Twitch Tab Manager</h2>
 
   <label class="switch">
@@ -19,7 +19,11 @@
     <button id="btnReload">Reload Config</button>
   </div>
 
-  <p class="hint">Tip: edit <code>follows.txt</code> & <code>config.json</code> then “Reload”.</p>
+  <div class="btns" style="margin-top:8px;">
+    <button id="btnOptions">Open Settings</button>
+  </div>
+
+  <p class="hint">Edit config & follows in <strong>Settings</strong>.</p>
 
   <script type="module" src="popup.js"></script>
 </body>

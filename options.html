@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Twitch Tab Manager — Options</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root { color-scheme: dark; }
+    html, body { background:#0b0f15; color:#e5e7eb; font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; margin:0; }
+    .container { max-width:1000px; margin:0 auto; padding:20px; }
+    h1 { font-size:22px; margin:0 0 12px; color:#f3f4f6; }
+    h2,h3,h4 { color:#f3f4f6; margin:16px 0 8px; }
+    a { color:#a78bfa; text-decoration:none; } a:hover { text-decoration:underline; }
+    .tabs { display:flex; gap:12px; border-bottom:1px solid #1f2937; margin-bottom:16px; }
+    .tab { padding:10px 12px; border:1px solid #1f2937; border-bottom:none; border-radius:8px 8px 0 0; background:#0f172a; color:#e5e7eb; cursor:pointer; }
+    .tab.active { background:#111827; font-weight:600; color:#fff; }
+    .panel { display:none; } .panel.active { display:block; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+    textarea { width:100%; min-height:280px; box-sizing:border-box; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:13px; padding:10px; border:1px solid #1f2937; border-radius:8px; background:#0f172a; color:#e5e7eb; }
+    .btns { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+    button, select, input { padding:8px 12px; border:1px solid #1f2937; border-radius:8px; background:#1f2937; color:#e5e7eb; }
+    button.primary { background:#9146FF; color:#fff; }
+    button:hover { filter:brightness(1.08); }
+    .note { font-size:12px; color:#9ca3af; margin:6px 0 0; }
+    .status { font-size:12px; margin-top:6px; }
+    .ok { color:#22c55e; } .err { color:#ef4444; }
+    .small { font-size:12px; color:#9ca3af; }
+    .help { line-height:1.55; }
+    pre,code { background:#111827; border:1px solid #1f2937; border-radius:8px; padding:8px; display:block; overflow:auto; color:#e5e7eb; }
+    code.inline { display:inline; padding:2px 6px; border-radius:6px; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .two { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    @media (max-width:900px){ .grid { grid-template-columns:1fr; } .two { grid-template-columns:1fr; } }
+    .miniTA { min-height:140px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Twitch Tab Manager — Settings</h1>
+
+    <div class="tabs">
+      <div class="tab active" data-tab="settings">Settings</div>
+      <div class="tab" data-tab="help">Help</div>
+    </div>
+
+    <!-- SETTINGS -->
+    <section id="panel-settings" class="panel active">
+      <p class="note">These values override the packaged files. Export/Import for backup or migration.</p>
+      <div class="grid">
+        <div>
+          <label><strong>Config (JSON)</strong></label>
+          <textarea id="cfg"></textarea>
+          <div class="btns">
+            <button id="saveCfg" class="primary">Save</button>
+            <button id="applyReload">Apply &amp; Reload</button>
+            <button id="exportCfg">Export</button>
+            <button id="importCfg">Import</button>
+            <button id="resetCfg">Reset to Packaged</button>
+            <button id="refreshCfg">Refresh From Storage</button>
+          </div>
+          <div id="cfgStatus" class="status"></div>
+        </div>
+
+        <div>
+          <label><strong>Follows (one <em>username</em> per line)</strong></label>
+          <p class="small">Example: for <code class="inline">twitch.tv/sery_bot</code>, enter <code class="inline">sery_bot</code> (lowercase).</p>
+          <textarea id="fol"></textarea>
+          <div class="btns">
+            <button id="saveFol" class="primary">Save</button>
+            <button id="exportFol">Export</button>
+            <button id="importFol">Import</button>
+            <button id="resetFol">Reset to Packaged</button>
+            <button id="refreshFol">Refresh From Storage</button>
+          </div>
+
+          <div class="btns">
+            <select id="fetchMode" title="How to fetch">
+              <option value="active">Open active tab (auto-scroll)</option>
+              <option value="current">Use my current Twitch tab</option>
+            </select>
+            <button id="fetchFollows">Fetch My Follows</button>
+          </div>
+          <div id="folStatus" class="status"></div>
+
+          <div class="btns" style="margin-top:10px;">
+            <button id="forcePoll">Force Poll Now</button>
+            <button id="reloadConfig">Reload Config in Background</button>
+          </div>
+          <p class="small">“Apply &amp; Reload” saves your JSON and asks the background worker to reload immediately.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- HELP -->
+    <section id="panel-help" class="panel">
+      <article class="help">
+        <h2>How to Use</h2>
+        <ol>
+          <li>Put each channel <strong>username</strong> on its own line in <strong>Follows</strong> (e.g., <code class="inline">sery_bot</code>).</li>
+          <li>In <strong>Config</strong>, set <code class="inline">client_id</code> and <code class="inline">access_token</code>, <em>or</em> set <code class="inline">"live_source":"following_html"</code> to avoid tokens.</li>
+          <li>Load the extension in <code class="inline">chrome://extensions</code>, toggle <strong>On</strong>, hit <strong>Force Poll</strong>.</li>
+        </ol>
+
+        <h3>Helix Setup (recommended)</h3>
+        <p>Prefer Helix for the most precise “who is live” checks. If you don’t want tokens, use the HTML fallback.</p>
+        <ol>
+          <li>Create a Twitch app at <a href="https://dev.twitch.tv/console/apps" target="_blank" rel="noopener">https://dev.twitch.tv/console/apps</a> (<em>Developer Console → Register Your Application</em>).</li>
+          <li>Use OAuth Redirect <code class="inline">http://localhost</code> (placeholder is fine).</li>
+          <li>Copy your <strong>Client ID</strong> (safe for config), keep your <strong>Client Secret</strong> private.</li>
+          <li>Generate an <strong>App Access Token</strong> (Client Credentials flow) using the snippet generator below.</li>
+        </ol>
+
+        <h3>Token Snippet Generator (fill → copy)</h3>
+        <div class="two">
+          <div>
+            <div class="row">
+              <label for="cid"><strong>Client ID:</strong></label>
+              <input id="cid" type="text" placeholder="YOUR_CLIENT_ID_HERE" style="flex:1;min-width:260px;">
+            </div>
+            <div class="row" style="margin-top:6px;">
+              <label for="csecret"><strong>Client Secret:</strong></label>
+              <input id="csecret" type="password" placeholder="YOUR_CLIENT_SECRET_HERE" style="flex:1;min-width:260px;">
+            </div>
+            <div class="btns" style="margin-top:8px;">
+              <button id="btnApplyCIDToCfg">Insert Client ID into Config JSON</button>
+            </div>
+            <p class="small">After you run the command and get <code class="inline">access_token</code>, paste that token into your config JSON.</p>
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <label for="tok"><strong>Access Token:</strong></label>
+            <input id="tok" type="text" placeholder="paste token here" style="flex:1;min-width:260px;">
+            <button id="btnApplyToken" class="primary">Insert Token</button>
+          </div>
+
+          <div>
+            <h4 style="margin:0 0 6px;">PowerShell (Windows)</h4>
+            <textarea id="ps1Out" class="miniTA" readonly></textarea>
+            <div class="btns"><button id="btnCopyPS1" class="primary">Copy PowerShell</button></div>
+
+            <h4 style="margin:12px 0 6px;">cURL</h4>
+            <textarea id="curlOut" class="miniTA" readonly></textarea>
+            <div class="btns"><button id="btnCopyCurl" class="primary">Copy cURL</button></div>
+          </div>
+        </div>
+
+        <h3>Example <code class="inline">config.json</code></h3>
+        <pre><code>{
+  "client_id": "YOUR_TWITCH_CLIENT_ID",
+  "access_token": "YOUR_APP_ACCESS_TOKEN",
+  "live_source": "auto",
+  "force_unmute": true,
+  "force_resume": true,
+  "check_interval_sec": 60,
+  "unmute_streams": true,
+  "max_tabs": 8,
+  "blacklist": []
+}
+</code></pre>
+
+        <p class="small">Tokens expire. If live checks start failing (HTTP <code class="inline">401</code>), generate a new token and update <code class="inline">config.json</code>.</p>
+      </article>
+    </section>
+  </div>
+
+  <input id="fileCfg" type="file" accept=".json,application/json" style="display:none" />
+  <input id="fileFol" type="file" accept=".txt,text/plain" style="display:none" />
+  <script type="module" src="options.js"></script>
+</body>
+</html>

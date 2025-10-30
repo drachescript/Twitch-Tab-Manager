@@ -1,4 +1,4 @@
-# Twitch Tab Manager (MV3)
+# Twitch Tab Manager
 
 Opens Twitch stream tabs for your followed channels, auto-unmutes/resumes playback, de-duplicates per channel, and enforces a max open tab limit. Built for **Chrome Manifest V3** (service worker + alarms). Windows-friendly, shareable with friends.
 
@@ -12,99 +12,97 @@ Opens Twitch stream tabs for your followed channels, auto-unmutes/resumes playba
 - [Configuration](#configuration)
   - [`follows.txt`](#followstxt)
   - [`config.json`](#configjson)
+- [Fetch My Follows (no files needed)](#fetch-my-follows-no-files-needed)
 - [Get `client_id` & `access_token`](#get-client_id--access_token)
-  - [Create a Twitch app (one-time)](#create-a-twitch-app-one-time)
+  - [Create a Twitch app](#create-a-twitch-app)
   - [Generate an App Access Token](#generate-an-app-access-token)
-    - [PowerShell (Windows)](#powershell-windows)
-    - [curl](#curl)
-  - [Token expiry & renewal](#token-expiry--renewal)
-- [How It Works (high level)](#how-it-works-high-level)
-- [Usage (popup controls)](#usage-popup-controls)
+- [How It Works](#how-it-works)
+- [Usage](#usage)
+  - [Popup](#popup)
+  - [Options](#options)
 - [Advanced Notes (MV3 specifics)](#advanced-notes-mv3-specifics)
 - [Troubleshooting](#troubleshooting)
+- [Feedback & Support](#feedback--support)
 - [FAQ](#faq)
-- [Packaging Tips](#packaging-tips)
-- [Privacy & Safety Notes](#privacy--safety-notes)
+- [Privacy Policy](#privacy-policy)
 - [Changelog](#changelog)
 
 ---
 
 ## Features
-- Auto-open/close Twitch channel tabs based on **live** status (Helix API).
+- Auto-open/close Twitch channel tabs based on **live** status via **Helix API** (`client_id` + `access_token`) or token-less **HTML fallback** (Following → Live).
 - **Unmute + resume** playback with gentle, randomized retries.
 - Per-channel **de-duplication** (keeps a single tab per channel).
-- Ignores non-player pages (e.g., `/drops`, `/moderator`, `/inventory`, `/directory`).
+- Ignores non-player pages (`/drops`, `/moderator`, `/inventory`, `/directory`).
 - **Max tab cap** (`max_tabs`) with least-recently-used closing.
-- **MV3 service worker + chrome.alarms** for reliable, low-overhead polling.
-- Minimal UI popup: **On/Off**, **Reload Config**, **Force Poll**.
+- **MV3** service worker + `chrome.alarms` for reliable, low-overhead polling.
+- **Dark mode** popup & options.
+- **Options** includes **Fetch My Follows** (pulls your full follow list automatically).
 
 ---
 
 ## Requirements
 - **Chrome** or Chromium-based browser with **Developer Mode**.
-- A Twitch **Client ID** and an **App Access Token** (see below).  
-  **Important:** Without `client_id` and `access_token`, the extension cannot detect who is live and **will not open any tabs**.
+- Either a Twitch **Client ID** + **App Access Token** (**Helix**) or set `"live_source": "following_html"` in `config.json` for **token-less** mode.  
+  Tip: Without credentials, use `"live_source": "following_html"` or `"auto"` (auto tries Helix first, then falls back to HTML).
 
 ---
 
 ## Folder Layout
-```
+```text
 / (extension root)
 ├─ manifest.json
-├─ background.js           # service worker: polling, open/close, dedupe, max_tabs
-├─ content_unmute.js       # injected into Twitch pages to unmute/resume playback
+├─ background.js              # polling, open/close, dedupe, max_tabs, Fetch My Follows
+├─ content_unmute.js          # unmute/resume helper injected on twitch.tv
 ├─ loadConfig.js
-├─ twitchAPI.js
-├─ tabManager.js
 ├─ popup.html
 ├─ popup.js
+├─ options.html
+├─ options.js
 ├─ style.css
-├─ follows.txt             # one channel login per line (lowercase)
-├─ config.json             # your settings + Twitch credentials
+├─ follows.txt                # one username per line (lowercase) — optional if using Fetch My Follows
+├─ config.json                # settings + credentials (optional if using HTML fallback)
 └─ icons/
    ├─ icon16.png
    ├─ icon32.png
    └─ icon192.png
-```
+````
 
 ---
 
 ## Quick Start
-1. Fill **`follows.txt`** with channel logins (one per line, lowercase). Example:
-   ```
-   xqc
-   shroud
-   amouranth
-   ```
-2. Open **`config.json`** and set:
-   - `"client_id"` = your Twitch app’s Client ID  
-   - `"access_token"` = your App Access Token (generated locally)  
-   - (Optionally) adjust `"check_interval_sec"`, `"max_tabs"`, etc.  
-   See full config reference below.
-3. In Chrome: go to `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select this folder.
-4. Click the extension icon → toggle **On** → click **Force Poll** to test instantly.
 
-> Tip: After editing `follows.txt` or `config.json`, click **Reload Config** in the popup.
+1. Open `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select this folder.
+2. Click the extension icon (popup) → toggle **On** → (optional) **Force Poll** to test instantly.
+3. Open **Options** → **Follows** → click **Fetch My Follows**
+
+   * **Open active tab (auto-scroll)**: opens `https://www.twitch.tv/directory/following/channels`, auto-scrolls to load all, saves usernames.
+   * **Use my current Twitch tab**: if you already opened that page and scrolled, it scrapes your open tab.
+4. (Optional) **Export/Import** your follows and **Export/Import** config for backup/restore.
 
 ---
 
 ## Configuration
 
 ### `follows.txt`
-- One **login name** per line (lowercase).  
-  Example:
-  ```
-  asmongold
-  pokimane
-  moistcr1tikal
-  ```
-- The login name is the part in the channel URL: `https://www.twitch.tv/<login>`.
+
+One **username** per line (lowercase). Example (`twitch.tv/sery_bot` → `sery_bot`):
+
+```txt
+sery_bot
+shroud
+pokimane
+```
+
+You can skip this file if you use **Fetch My Follows**.
 
 ### `config.json`
+
 ```json
 {
   "client_id": "YOUR_TWITCH_CLIENT_ID",
   "access_token": "YOUR_APP_ACCESS_TOKEN",
+  "live_source": "auto",
   "force_unmute": true,
   "force_resume": true,
   "check_interval_sec": 60,
@@ -113,31 +111,43 @@ Opens Twitch stream tabs for your followed channels, auto-unmutes/resumes playba
   "blacklist": []
 }
 ```
-- **client_id** — From your Twitch application (see steps below).  
-- **access_token** — App Access Token (Client Credentials flow).  
-- **force_unmute / force_resume / unmute_streams** — Playback helpers.  
-- **check_interval_sec** — Poll cadence; keep **≥ 30s** for human-like behavior (default 60s).  
-- **max_tabs** — Cap on simultaneously open channel tabs; least-recently-used tabs beyond this will close.  
-- **blacklist** — Array of channel logins the manager should never auto-open.
+
+* **live_source** — `"helix"` | `"following_html"` | `"auto"` (default)
+
+  * **helix**: Twitch API (needs `client_id` + `access_token`)
+  * **following_html**: token-less; scrapes Following → Live
+  * **auto**: try Helix, then fallback to HTML
+* **check_interval_sec** — poll cadence; keep ≥ 30s (default 60s)
+* **max_tabs** — cap for simultaneously open channels (LRU closes extras)
+* **blacklist** — array of usernames that should never auto-open
+
+---
+
+## Fetch My Follows (no files needed)
+
+In **Options → Follows**:
+
+* **Fetch My Follows**
+
+  * **Open active tab (auto-scroll)** — opens the official Following → Channels page, finds the real scroll container, synthesizes wheel events, auto-scrolls to load all follows, and saves them locally.
+  * **Use my current Twitch tab** — scrapes the page you already opened and scrolled.
+
+You can still **Export/Import** your list as `follows.txt`.
 
 ---
 
 ## Get `client_id` & `access_token`
 
-### Create a Twitch app (one-time)
-1. Go to the **Twitch Developer Console** → *Your Console*.  
-2. Click **Register Your Application**:
-   - **Name:** e.g., `Twitch Tab Manager Local`  
-   - **OAuth Redirect URL:** `http://localhost` (placeholder is fine for this use)  
-   - **Category:** Website Integration (or similar)
-3. Open your app:
-   - Copy the **Client ID** (safe to put in `config.json`).  
-   - Copy the **Client Secret** (keep it private; do **not** commit to GitHub).
+### Create a Twitch app
+
+* Go to **Developer Console** → [https://dev.twitch.tv/console/apps](https://dev.twitch.tv/console/apps) → **Register Your Application**
+* OAuth Redirect: `http://localhost` (placeholder OK)
+* Copy **Client ID** (keep **Client Secret** private).
 
 ### Generate an App Access Token
-Use the **Client Credentials** grant to get a non-user token.
 
-#### PowerShell (Windows)
+**PowerShell (Windows)**
+
 ```powershell
 $client_id = "YOUR_CLIENT_ID_HERE"
 $client_secret = "YOUR_CLIENT_SECRET_HERE"
@@ -148,10 +158,11 @@ $body = @{
 }
 $response = Invoke-RestMethod -Method Post -Uri "https://id.twitch.tv/oauth2/token" -Body $body
 $response | Format-List
-# Copy the "access_token" into config.json: "access_token": "<value>"
+# Put the value of $response.access_token into config.json ("access_token")
 ```
 
-#### curl
+**curl**
+
 ```bash
 curl -X POST "https://id.twitch.tv/oauth2/token" \
   -d "client_id=YOUR_CLIENT_ID_HERE" \
@@ -159,92 +170,160 @@ curl -X POST "https://id.twitch.tv/oauth2/token" \
   -d "grant_type=client_credentials"
 ```
 
-You’ll get:
-```json
-{
-  "access_token": "xxxxxxxx",
-  "expires_in": 5184000,
-  "token_type": "bearer"
-}
-```
-
-### Token expiry & renewal
-- The token eventually expires (`expires_in` seconds).  
-- If live checks start failing (**HTTP 401**), re-run the command to get a new token and update `config.json`.
-
-> **Security:** Never share or commit your **client secret** or **access token** to public repos.
+> Tokens expire. If live checks return **401**, generate a new token and update `config.json`.
 
 ---
 
-## How It Works (high level)
-- The service worker (background) wakes on an **alarm** (default every 60s).  
-- It fetches your config + follows list and queries Twitch Helix for **live** channels (batching `user_login` params).  
-- For channels that just went **live**:
-  - Opens tabs up to **`max_tabs`**, staggered slightly to avoid robotic patterns.  
-  - Injects **`content_unmute.js`** to resume/unmute playback with gentle retries.  
-- For channels that went **offline** or are **unfollowed**:
-  - Closes those tabs (LRU beyond `max_tabs` also close).  
-- It **de-duplicates** per channel (keeps one tab per channel).
+## How It Works
+
+Service worker wakes via `chrome.alarms` (default ~60s) → loads config + follows → determines who is **live** (Helix or HTML) → opens streams (up to `max_tabs`), injects `content_unmute.js` to resume/unmute → closes duplicates, unfollowed, or over-cap tabs using LRU.
 
 ---
 
-## Usage (popup controls)
-- **Toggle** — Enables/disables the manager (saved in local storage).  
-- **Reload Config** — Re-reads `config.json` & `follows.txt` without reloading the extension.  
-- **Force Poll** — Triggers an immediate live check (useful for testing).
+## Usage
+
+### Popup
+
+* **On/Off** — master enable/disable (stored locally)
+* **Force Poll** — immediate check (hard override)
+* **Reload Config** — reloads config in the background
+* **Open Settings** — opens the Options page
+
+### Options
+
+* **Config (JSON)** — Edit / **Save** / **Apply & Reload** / **Export** / **Import**
+* **Follows** — Edit / **Save** / **Export** / **Import** / **Fetch My Follows**
+
+  * Hint: one username per line — the `sery_bot` part of `twitch.tv/sery_bot`.
 
 ---
 
 ## Advanced Notes (MV3 specifics)
-- **No persistent background page.** MV3 uses a **service worker**; we use **`chrome.alarms`** for heartbeat.  
-- **No long `setInterval` loops.** The alarm wakes the worker; we respect `check_interval_sec` with a simple gate.  
-- **Script injection:** uses **`chrome.scripting.executeScript`** to inject `content_unmute.js` after a short, randomized delay.  
-- **Permissions:** declared in `manifest.json` (`tabs`, `storage`, `alarms`, `scripting` + `host_permissions` for Twitch).
+
+* MV3 service worker sleeps between polls; uses `chrome.alarms` as a heartbeat.
+* Script injection via `chrome.scripting.executeScript`.
+* Host scope limited to `twitch.tv`.
+* No analytics or telemetry.
 
 ---
 
 ## Troubleshooting
-- **No tabs open:**  
-  - Ensure `config.json` has a valid **`client_id`** and **non-expired `access_token`**.  
-  - Ensure **`follows.txt`** has correct **lowercase** logins (one per line).  
-  - Click **Force Poll** to test now.
-- **401 Unauthorized in logs:**  
-  - Your access token expired → generate a fresh token and update `config.json`.
-- **Opens the wrong pages or extra tabs:**  
-  - Make sure logins in `follows.txt` match the Twitch login exactly (lowercase).  
-  - The manager ignores `/drops`, `/moderator`, `/inventory`, `/directory`.
-- **Extension seems inactive:**  
-  - Check the popup toggle is **On**.  
-  - Open `chrome://extensions`, click **Service worker** under the extension to view background logs.
+
+* **No tabs open** — Helix: token expired (401) → re-issue; HTML: ensure follows exist or use **Fetch My Follows**.
+* **Force Poll seems ignored** — Toggle **On** in popup; in Options, click **Apply & Reload**.
+* **Wrong usernames pulled** — Ensure lowercase; fetcher reads **Following → Channels** cards (not Live/Recommended).
+* **Didn’t fetch all follows** — Open **Following → Channels** yourself, scroll to bottom, then use **Use my current Twitch tab** mode.
+
+---
+
+## Feedback & Support
+
+* Bugs and feature requests: [https://github.com/drachescript/Twitch-Tab-Manager/issues/new/choose](https://github.com/drachescript/Twitch-Tab-Manager/issues/new/choose)
+* Discussions and tips: [https://github.com/drachescript/Twitch-Tab-Manager/discussions](https://github.com/drachescript/Twitch-Tab-Manager/discussions)
+* Source code and README: [https://github.com/drachescript/Twitch-Tab-Manager](https://github.com/drachescript/Twitch-Tab-Manager)
 
 ---
 
 ## FAQ
-**Q: Can this run without Twitch credentials?**  
-**A:** No. The Helix API requires `client_id` + an App Access Token to read live status.
 
-**Q: Will this spam Twitch?**  
-**A:** No. The manager batches all `user_login` checks into a single request per poll and uses coarse intervals (default 60s).
-
-**Q: Why Manifest V3?**  
-**A:** MV2 is deprecated/disabled in current Chrome; MV3 service worker + alarms is the stable path forward.
-
-**Q: Can I favorite or prioritize some channels?**  
-**A:** Not yet—roadmap includes priority tiers and smarter selection when more than `max_tabs` are live.
+* **Can it run without tokens?** — Yes: set `"live_source": "following_html"` or `"auto"`.
+* **Does it spam Twitch?** — No: batched requests and coarse intervals by default.
+* **Can I favorite or prioritize?** — Not yet; planned.
 
 ---
 
-## Packaging Tips
-- Do **not** include `node_modules/` or unused icon sizes in your packed zip.  
-- Keep `check_interval_sec ≥ 30` to avoid robotic behavior.  
-- If distributing publicly, don’t ship a real `access_token` or **client secret**.
+## Privacy Policy
+
+We don’t collect, sell, or share personal data. All configuration stays on your device.
+Full policy (Google Doc): [https://docs.google.com/document/d/1SkvBWapQawvzuhaYT-iHOoUSV0go4PgFhtxi6Z6nwjA/edit?usp=sharing](https://docs.google.com/document/d/1SkvBWapQawvzuhaYT-iHOoUSV0go4PgFhtxi6Z6nwjA/edit?usp=sharing)
 
 ---
 
-## Privacy & Safety Notes
-- All credentials are stored **locally** in `config.json` on your machine.  
-- No data is sent anywhere except the standard Twitch API requests your browser makes.  
-- Keep your **client secret** offline and out of any public repo.
+# Changelog
+
+All notable changes to **Twitch Tab Manager** are documented here.
+Dates use `DD/MM/YYYY`.
+
+---
+
+## [1.0.5] — 30/10/2025
+
+### Fixed
+
+* **Fetch My Follows**: ignores the left sidebar and scrapes only the **Following → Channels** grid; reliably auto-scrolls the real scroll container to load the full list.
+* **Background hydration**: waits for tab `complete`, prevents early auto-discard while booting, then injects `content_unmute.js` and explicitly unmutes—reduces “ghost muted” tabs.
+* **Auto-close**: more consistent cleanup of tabs for channels that went offline (with a short grace period).
+* **Moderator View aware**: if `/moderator/<login>` (or equivalent) is already open, the extension won’t open a second `/ <login>` tab for that streamer.
+
+### Added
+
+* **Config auto-migration**: when new options are introduced, missing keys are added without overwriting the user’s values.
+* **Follow fetch modes** in Options → Follows:
+
+  * *Open active tab (auto-scroll)* — launches the official page and scrolls it to harvest all usernames.
+  * *Use my current Twitch tab* — scrapes the page you already opened & scrolled.
+* **Token helpers** in Options → Help: PowerShell / curl snippet generators with copy buttons and quick “insert into config” actions.
+
+### Changed
+
+* **Deduplication & tab cap** tuned; keeps one tab per channel and trims by LRU beyond `max_tabs`.
+* More human retry/backoff in `content_unmute.js` (gentle resume + unmute attempts).
+* README & privacy link included; setup instructions clarified.
+
+---
+
+## [1.0.4] — 18/09/2025
+
+### Added
+
+* Initial public **MV3** release (service worker + alarms).
+* Live detection via **Helix** (`client_id` + `access_token`) or token-less **HTML fallback**.
+* Per-channel de-duplication; `max_tabs` limit with LRU closing.
+* Basic popup controls: **On/Off**, **Force Poll**, **Reload Config**.
+* Dark Options/Popup styling; manual `follows.txt` + import/export.
+
+---
+
+## [1.0.3] — 12/09/2025
+
+### Added
+
+* Early HTML scraping prototype for Following pages.
+* Basic unmute/resume content script.
+
+### Changed
+
+* Polished folder layout; icons; initial README.
+
+---
+
+## [1.0.2] — 10/09/2025
+
+### Fixed
+
+* Stability fixes around opening multiple tabs at once.
+
+---
+
+## [1.0.1] — 08/09/2025
+
+### Added
+
+* First working background poller; minimal config.
+
+---
+
+## [1.0.0] — 05/09/2025
+
+### Added
+
+* Project scaffolding; initial commit.
+
+---
+
+## Unreleased / Roadmap 
+
+* Per-channel behavior (priority, open muted, optional “!lurk” chat message).
+* Automatic Helix→HTML fallback with exponential backoff & a Debug log tab.
 
 ```
-::contentReference[oaicite:0]{index=0}
