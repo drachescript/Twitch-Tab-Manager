@@ -2,6 +2,9 @@
 
 Opens Twitch stream tabs for your followed channels, auto-unmutes/resumes playback, de-duplicates per channel, and enforces a max open tab limit. Built for **Chrome Manifest V3** (service worker + alarms). Windows-friendly, shareable with friends.
 
+**Chrome Web Store:**  
+`https://chromewebstore.google.com/detail/twitch-tab-manager/dagoljomgoainmmfldhnikegghjhbdaf`
+
 ---
 
 ## Table of Contents
@@ -327,3 +330,4 @@ Dates use `DD/MM/YYYY`.
 * Automatic Helix→HTML fallback with exponential backoff & a Debug log tab.
 
 ```
+
