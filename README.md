@@ -67,7 +67,7 @@ Opens Twitch stream tabs for your followed channels, auto-unmutes/resumes playba
 
 ## Quick Start
 
-0. **Install from the Chrome Web Store** — use the Web Store link already present in this README.
+0. **Install from the Chrome Web Store** — [https://chromewebstore.google.com/detail/twitch-tab-manager/dagoljomgoainmmfldhnikegghjhbdaf](https://chromewebstore.google.com/detail/twitch-tab-manager/dagoljomgoainmmfldhnikegghjhbdaf)
 
 1. Open `chrome://extensions` → enable **Developer mode** → **Load unpacked** (for local/dev builds) → select this folder.
 
@@ -261,3 +261,4 @@ All notable changes use `DD/MM/YYYY`.
 * **Max tabs**: stricter enforcement without touching user-opened tabs except when the streamer is offline.
 
 ```
+
