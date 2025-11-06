@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
     :root { color-scheme: dark; }
-    html, body { background:#0b0f15; color:#e5e7eb; font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; margin:0; }
+    html, body { background:#0b0f15; color:#e5e7eb; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; margin:0; }
     .container { max-width:1000px; margin:0 auto; padding:20px; }
     h1 { font-size:22px; margin:0 0 12px; color:#f3f4f6; }
     h2,h3,h4 { color:#f3f4f6; margin:16px 0 8px; }
@@ -35,116 +35,126 @@
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>Twitch Tab Manager — Settings</h1>
+<div class="container">
+  <h1>Twitch Tab Manager — Settings</h1>
 
-    <div class="tabs">
-      <div class="tab active" data-tab="settings">Settings</div>
-      <div class="tab" data-tab="help">Help</div>
+  <div class="tabs">
+    <div class="tab active" data-tab="settings">Settings</div>
+    <div class="tab" data-tab="help">Help</div>
+    <div class="tab" data-tab="debug">Debug</div>
+  </div>
+
+  <!-- SETTINGS -->
+  <section id="panel-settings" class="panel active">
+    <p class="note">These values override the packaged files. Export/Import for backup or migration.</p>
+
+    <div class="grid">
+      <div>
+        <label><strong>Config (JSON)</strong></label>
+        <textarea id="cfg"></textarea>
+        <div class="btns">
+          <button id="saveCfg" class="primary">Save</button>
+          <button id="applyReload">Apply &amp; Reload</button>
+          <button id="exportCfg">Export</button>
+          <button id="importCfg">Import</button>
+          <button id="resetCfg">Reset to Packaged</button>
+          <button id="refreshCfg">Refresh From Storage</button>
+        </div>
+        <div id="cfgStatus" class="status"></div>
+      </div>
+
+      <div>
+        <label><strong>Follows (one <em>username</em> per line)</strong></label>
+        <p class="small">Example: for <code class="inline">twitch.tv/sery_bot</code>, enter <code class="inline">sery_bot</code> (lowercase).</p>
+        <textarea id="fol"></textarea>
+        <div class="btns">
+          <button id="saveFol" class="primary">Save</button>
+          <button id="exportFol">Export</button>
+          <button id="importFol">Import</button>
+          <button id="resetFol">Reset to Packaged</button>
+          <button id="refreshFol">Refresh From Storage</button>
+        </div>
+
+        <div class="btns">
+          <select id="fetchMode" title="How to fetch">
+            <option value="active">Open active tab (auto-scroll)</option>
+            <option value="current">Use my current Twitch tab</option>
+          </select>
+          <button id="fetchFollows">Fetch My Follows</button>
+        </div>
+        <div id="folStatus" class="status"></div>
+
+        <div class="btns" style="margin-top:10px;">
+          <button id="forcePoll">Force Poll Now</button>
+          <button id="reloadConfig">Reload Config in Background</button>
+        </div>
+        <p class="small">“Apply &amp; Reload” saves your JSON and asks the background worker to reload immediately.</p>
+      </div>
     </div>
 
-    <!-- SETTINGS -->
-    <section id="panel-settings" class="panel active">
-      <p class="note">These values override the packaged files. Export/Import for backup or migration.</p>
-      <div class="grid">
+    <!-- Priority Channels lives ONLY in Settings -->
+    <section>
+      <h3>Priority Channels</h3>
+      <p>One channel per line (lowercase).</p>
+      <textarea id="priorityBox" rows="6" style="width:100%"></textarea>
+      <button id="prioritySave" class="btn">Save Priority</button>
+    </section>
+  </section>
+  <!-- HELP -->
+  <section id="panel-help" class="panel">
+    <article class="help">
+      <h2>How to Use</h2>
+      <ol>
+        <li>Put each channel <strong>username</strong> on its own line in <strong>Follows</strong> (e.g., <code class="inline">sery_bot</code>).</li>
+        <li>In <strong>Config</strong>, set <code class="inline">client_id</code> and <code class="inline">access_token</code>, or set <code class="inline">"live_source":"following_html"</code> to avoid tokens.</li>
+        <li>Load the extension in <code class="inline">chrome://extensions</code>, toggle <strong>On</strong>, hit <strong>Force Poll</strong>.</li>
+      </ol>
+
+      <h3>Helix Setup (recommended)</h3>
+      <p>Prefer Helix for the most precise “who is live” checks. If you don’t want tokens, use the HTML fallback.</p>
+      <ol>
+        <li>Create a Twitch app at <a href="https://dev.twitch.tv/console/apps" target="_blank" rel="noopener">https://dev.twitch.tv/console/apps</a>.</li>
+        <li>Use OAuth Redirect <code class="inline">http://localhost</code> (placeholder is fine).</li>
+        <li>Copy your <strong>Client ID</strong> (safe for config), keep your <strong>Client Secret</strong> private.</li>
+        <li>Generate an <strong>App Access Token</strong> (Client Credentials flow) using the snippet generator below.</li>
+      </ol>
+
+      <h3>Token Snippet Generator (fill → copy)</h3>
+      <div class="two">
         <div>
-          <label><strong>Config (JSON)</strong></label>
-          <textarea id="cfg"></textarea>
-          <div class="btns">
-            <button id="saveCfg" class="primary">Save</button>
-            <button id="applyReload">Apply &amp; Reload</button>
-            <button id="exportCfg">Export</button>
-            <button id="importCfg">Import</button>
-            <button id="resetCfg">Reset to Packaged</button>
-            <button id="refreshCfg">Refresh From Storage</button>
+          <div class="row">
+            <label for="cid"><strong>Client ID:</strong></label>
+            <input id="cid" type="text" placeholder="YOUR_CLIENT_ID_HERE" style="flex:1;min-width:260px;">
           </div>
-          <div id="cfgStatus" class="status"></div>
+          <div class="row" style="margin-top:6px;">
+            <label for="csecret"><strong>Client Secret:</strong></label>
+            <input id="csecret" type="password" placeholder="YOUR_CLIENT_SECRET_HERE" style="flex:1;min-width:260px;">
+          </div>
+          <div class="btns" style="margin-top:8px;">
+            <button id="btnApplyCIDToCfg">Insert Client ID into Config JSON</button>
+          </div>
+          <p class="small">After you run the command and get <code class="inline">access_token</code>, paste that token into your config JSON.</p>
+        </div>
+
+        <div class="row" style="margin-top:8px;">
+          <label for="tok"><strong>Access Token:</strong></label>
+          <input id="tok" type="text" placeholder="paste token here" style="flex:1;min-width:260px;">
+          <button id="btnApplyToken" class="primary">Insert Token</button>
         </div>
 
         <div>
-          <label><strong>Follows (one <em>username</em> per line)</strong></label>
-          <p class="small">Example: for <code class="inline">twitch.tv/sery_bot</code>, enter <code class="inline">sery_bot</code> (lowercase).</p>
-          <textarea id="fol"></textarea>
-          <div class="btns">
-            <button id="saveFol" class="primary">Save</button>
-            <button id="exportFol">Export</button>
-            <button id="importFol">Import</button>
-            <button id="resetFol">Reset to Packaged</button>
-            <button id="refreshFol">Refresh From Storage</button>
-          </div>
+          <h4 style="margin:0 0 6px;">PowerShell (Windows)</h4>
+          <textarea id="ps1Out" class="miniTA" readonly></textarea>
+          <div class="btns"><button id="btnCopyPS1" class="primary">Copy PowerShell</button></div>
 
-          <div class="btns">
-            <select id="fetchMode" title="How to fetch">
-              <option value="active">Open active tab (auto-scroll)</option>
-              <option value="current">Use my current Twitch tab</option>
-            </select>
-            <button id="fetchFollows">Fetch My Follows</button>
-          </div>
-          <div id="folStatus" class="status"></div>
-
-          <div class="btns" style="margin-top:10px;">
-            <button id="forcePoll">Force Poll Now</button>
-            <button id="reloadConfig">Reload Config in Background</button>
-          </div>
-          <p class="small">“Apply &amp; Reload” saves your JSON and asks the background worker to reload immediately.</p>
+          <h4 style="margin:12px 0 6px;">cURL</h4>
+          <textarea id="curlOut" class="miniTA" readonly></textarea>
+          <div class="btns"><button id="btnCopyCurl" class="primary">Copy cURL</button></div>
         </div>
       </div>
-    </section>
 
-    <!-- HELP -->
-    <section id="panel-help" class="panel">
-      <article class="help">
-        <h2>How to Use</h2>
-        <ol>
-          <li>Put each channel <strong>username</strong> on its own line in <strong>Follows</strong> (e.g., <code class="inline">sery_bot</code>).</li>
-          <li>In <strong>Config</strong>, set <code class="inline">client_id</code> and <code class="inline">access_token</code>, <em>or</em> set <code class="inline">"live_source":"following_html"</code> to avoid tokens.</li>
-          <li>Load the extension in <code class="inline">chrome://extensions</code>, toggle <strong>On</strong>, hit <strong>Force Poll</strong>.</li>
-        </ol>
-
-        <h3>Helix Setup (recommended)</h3>
-        <p>Prefer Helix for the most precise “who is live” checks. If you don’t want tokens, use the HTML fallback.</p>
-        <ol>
-          <li>Create a Twitch app at <a href="https://dev.twitch.tv/console/apps" target="_blank" rel="noopener">https://dev.twitch.tv/console/apps</a> (<em>Developer Console → Register Your Application</em>).</li>
-          <li>Use OAuth Redirect <code class="inline">http://localhost</code> (placeholder is fine).</li>
-          <li>Copy your <strong>Client ID</strong> (safe for config), keep your <strong>Client Secret</strong> private.</li>
-          <li>Generate an <strong>App Access Token</strong> (Client Credentials flow) using the snippet generator below.</li>
-        </ol>
-
-        <h3>Token Snippet Generator (fill → copy)</h3>
-        <div class="two">
-          <div>
-            <div class="row">
-              <label for="cid"><strong>Client ID:</strong></label>
-              <input id="cid" type="text" placeholder="YOUR_CLIENT_ID_HERE" style="flex:1;min-width:260px;">
-            </div>
-            <div class="row" style="margin-top:6px;">
-              <label for="csecret"><strong>Client Secret:</strong></label>
-              <input id="csecret" type="password" placeholder="YOUR_CLIENT_SECRET_HERE" style="flex:1;min-width:260px;">
-            </div>
-            <div class="btns" style="margin-top:8px;">
-              <button id="btnApplyCIDToCfg">Insert Client ID into Config JSON</button>
-            </div>
-            <p class="small">After you run the command and get <code class="inline">access_token</code>, paste that token into your config JSON.</p>
-          </div>
-          <div class="row" style="margin-top:8px;">
-            <label for="tok"><strong>Access Token:</strong></label>
-            <input id="tok" type="text" placeholder="paste token here" style="flex:1;min-width:260px;">
-            <button id="btnApplyToken" class="primary">Insert Token</button>
-          </div>
-
-          <div>
-            <h4 style="margin:0 0 6px;">PowerShell (Windows)</h4>
-            <textarea id="ps1Out" class="miniTA" readonly></textarea>
-            <div class="btns"><button id="btnCopyPS1" class="primary">Copy PowerShell</button></div>
-
-            <h4 style="margin:12px 0 6px;">cURL</h4>
-            <textarea id="curlOut" class="miniTA" readonly></textarea>
-            <div class="btns"><button id="btnCopyCurl" class="primary">Copy cURL</button></div>
-          </div>
-        </div>
-
-        <h3>Example <code class="inline">config.json</code></h3>
-        <pre><code>{
+      <h3>Example <code class="inline">config.json</code></h3>
+      <pre><code>{
   "client_id": "YOUR_TWITCH_CLIENT_ID",
   "access_token": "YOUR_APP_ACCESS_TOKEN",
   "live_source": "auto",
@@ -157,13 +167,29 @@
 }
 </code></pre>
 
-        <p class="small">Tokens expire. If live checks start failing (HTTP <code class="inline">401</code>), generate a new token and update <code class="inline">config.json</code>.</p>
-      </article>
-    </section>
-  </div>
+      <p class="small">Tokens expire. If live checks start failing (HTTP <code class="inline">401</code>), generate a new token and update <code class="inline">config.json</code>.</p>
+    </article>
+  </section>
+</div>
 
-  <input id="fileCfg" type="file" accept=".json,application/json" style="display:none" />
-  <input id="fileFol" type="file" accept=".txt,text/plain" style="display:none" />
-  <script type="module" src="options.js"></script>
+<section id="panel-debug" class="panel">
+  <h2>Debug</h2>
+  <div class="btns">
+    <button id="dbgRun" class="primary">Run Diagnostics</button>
+    <button id="dbgCopy">Copy Results</button>
+    <button id="dbgClear">Clear Logs</button>
+  </div>
+  <p class="small">Use “Run Diagnostics” while some follows are live. Results include settings, live list, open channels, capacity, and internal logs.</p>
+  <textarea id="dbgOut" class="miniTA" style="min-height:260px" readonly></textarea>
+  <h3 style="margin-top:16px;">Open Channel Test</h3>
+  <div class="row">
+    <input id="dbgChannel" type="text" placeholder="channel login (lowercase)" style="flex:1;min-width:260px;">
+    <button id="dbgOpen">Try Open</button>
+  </div>
+</section>
+
+<input id="fileCfg" type="file" accept=".json,application/json" style="display:none" />
+<input id="fileFol" type="file" accept=".txt,text/plain" style="display:none" />
+<script type="module" src="options.js"></script>
 </body>
 </html>

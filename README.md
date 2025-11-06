@@ -214,14 +214,13 @@ All notable changes use `DD/MM/YYYY`.
 
 ### [1.0.6] — Unreleased
 
-* Docs: README updated (streamlined Features, Requirements link to setup, Quick Start includes Web Store, Support links fixed).
-* Settings: documented `autoplay_streams`, `force_unmute` vs `unmute_streams`.
-* Note: If you want to **try WIP features for 1.0.6**, ask for the files.
+* **Priority**: Added priority so it will first open ur priority streamers before ur follows also added Options textarea + popup **Add/Remove** when ur on a streamer page.
+* **Smaller fixes**: Better offline detection, added Diagnostics for debugging, max tabs broken fix, fixed polling active streamers, better "human" interactions with twitch and others.
+* **Note**: If you want to **try WIP features for 1.0.6**, ask for the files.
 
 ### [1.0.5] — 30/10/2025
 
 * **Fetch My Follows**: ignores sidebar; scrapes the **Following → Channels** grid; reliably auto-scrolls the real container.
-* **Background hydration**: waits for tab `complete`, prevents early auto-discard while booting, then injects `content_unmute.js` and explicitly unmutes—reduces “ghost muted” tabs.
 * **Auto-close**: more consistent cleanup of tabs for channels that went offline (with a short grace period).
 * **Moderator View aware**: won’t open a duplicate `/login` tab if `/moderator/login` is already open.
 * **Config auto-migration**: when new options are introduced, missing keys are added without overwriting existing values.
@@ -251,14 +250,14 @@ All notable changes use `DD/MM/YYYY`.
 
 ## Roadmap
 
-* **Priority from Popup**: when on a streamer page, popup shows **Add to Priority** / **Remove from Priority**.
-* **Popup Quick Unmute**: one-click unmute using Twitch’s `player-mute-unmute-button`.
 * **Autoplay toggle**: when the player is paused (`player-play-pause-button` shows “Play”), auto-start playback.
 * **Ad-aware audio**: mute during ads, restore after, with safe backoff (no spam).
 * **Debug tab**: recent errors, open/close reasons, and actions log.
 * **Optional `!lurk`** chat message for a whitelist of streamers.
 * **Auto-claim**: Moments + Channel Points (no Drops).
-* **Max tabs**: stricter enforcement without touching user-opened tabs except when the streamer is offline.
+* Raid/host handling: hold raid tabs briefly, then respect priority/limits.
+* Debug tab (Options): recent errors/actions with **Copy to clipboard**.
 
 ```
+
 

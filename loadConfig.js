@@ -1,4 +1,4 @@
-// Returns config + follows[] with sane defaults, preferring chrome.storage overrides.
+// loadConfig.js
 export async function loadConfig() {
   const DEF = {
     force_unmute: true,

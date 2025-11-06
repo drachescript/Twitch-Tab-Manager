@@ -1,5 +1,4 @@
-// Lightweight helpers for UI or future modules.
-// Background service worker does the heavy lifting.
+// tabManager.js
 
 export function forcePoll() {
   return new Promise(resolve => {
