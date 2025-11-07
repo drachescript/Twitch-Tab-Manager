@@ -1,34 +1,21 @@
 {
   "manifest_version": 3,
   "name": "Twitch Tab Manager",
-  "description": "Open your followed Twitch streams when they go live—priority, unmute/resume, no duplicates, tab cap.",
   "version": "1.0.6",
-  "author": "dragonscripts",
-  "icons": {
-    "16": "icons/icon16.png",
-    "32": "icons/icon32.png",
-    "192": "icons/icon192.png"
-  },
   "action": { "default_popup": "popup.html", "default_title": "Twitch Tab Manager" },
   "background": { "service_worker": "background.js", "type": "module" },
   "options_page": "options.html",
-  "permissions": ["tabs","storage","alarms","scripting","downloads", "cookies"],
-  "host_permissions": [
-    "*://www.twitch.tv/*",
-    "*://twitch.tv/*",
-    "https://api.twitch.tv/*",
-    "https://id.twitch.tv/*",
-    "https://*.twitch.tv/*",
-    "*://*.twitch.tv/*"
-  ],
-  "web_accessible_resources": [
-    { "resources": ["content_unmute.js"], "matches": ["*://www.twitch.tv/*","*://twitch.tv/*"] }
-  ],
-  "content_scripts": [
-    {
-      "matches": ["*://www.twitch.tv/*"],
-      "js": ["content_status.js"],
-      "run_at": "document_idle"
-    }
-  ]
+  "permissions": ["tabs","storage","alarms","scripting","downloads","cookies"],
+  "host_permissions": ["*://www.twitch.tv/*","*://twitch.tv/*","*://api.twitch.tv/*","*://id.twitch.tv/*"],
+
+  "web_accessible_resources": [{
+    "resources": [
+      "config.json",
+      "follows.txt",
+      "assets/*"
+    ],
+    "matches": ["*://*/*"]
+  }],
+
+  "icons": {  "16": "icons/icon16.png","32": "icons/icon32.png", "192": "icons/icon192.png" }
 }

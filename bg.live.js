@@ -1,4 +1,6 @@
 // bg.live.js
+import { log } from './bg.core.js';
+
 async function execScriptMV3(tabId, func) {
   try {
     const [{ result }] = await chrome.scripting.executeScript({
@@ -39,7 +41,7 @@ async function execScriptMV3(tabId, func) {
     }
     return [...out];
   }
-// --- Channel-page probe (no cookies, no tabs) ---
+// Channel probe
 async function fetchText(url) {
   try {
     const r = await fetch(url, {
@@ -72,12 +74,24 @@ async function probeChannelPagesLive(cfg, need) {
   const base = (cfg?.followUnion && cfg.followUnion.length ? cfg.followUnion : cfg?.follows) || [];
   const ordered = [...new Set([...(priority || []), ...(base || [])])].map(s => String(s||"").trim().toLowerCase()).filter(Boolean);
 
-  if (ordered.length === 0) return [];
+  log('probe_check', `Found ${ordered.length} channels to check`);
+  log('probe_info', {
+    priority_count: priority.length,
+    base_count: base.length,
+    followUnion: cfg?.followUnion?.length || 0,
+    follows: cfg?.follows?.length || 0
+  });
+  
+  if (ordered.length === 0) {
+    log('probe_error', 'No channels to check - both follows and followUnion are empty');
+    return [];
+  }
 
   const concurrency = 8;              // parallel fetches
   const hardCap = Math.min(60, ordered.length); // never check more than 60 per poll
   const target = Math.max(1, Math.min(need || 4, hardCap));
   
+  log('probe_check', `Target: ${target}, Hard cap: ${hardCap}, Concurrency: ${concurrency}`);
   const live = [];
   let idx = 0;
 
@@ -85,15 +99,21 @@ async function probeChannelPagesLive(cfg, need) {
     while (idx < hardCap && live.length < target) {
       const i = idx++;
       const login = ordered[i];
-      const html = await fetchText(`https://www.twitch.tv/${login}`);
-      if (htmlHasLiveFlags(html)) {
-        live.push(login);
+      try {
+        const html = await fetchText(`https://www.twitch.tv/${login}`);
+        if (htmlHasLiveFlags(html)) {
+          log('probe_found', `Channel ${login} is live`);
+          live.push(login);
+        }
+      } catch (e) {
+        log('probe_error', `Error checking ${login}: ${e.message}`);
       }
     }
   }
 
   const workers = Array.from({ length: concurrency }, () => worker());
   await Promise.all(workers);
+  log('probe_complete', `Found ${live.length} live channels out of ${idx} checked`);
   return live;
 }
 
@@ -137,7 +157,7 @@ async function probeChannelPagesLive(cfg, need) {
     return [];
   }
 }
-// Robust HTML poller: reads /directory/following/live without opening tabs
+// HTML following poller
 async function getLiveFromFollowingHtml() {
   const url = 'https://www.twitch.tv/directory/following/live?ttm=1';
   // carry cookies so Twitch knows your follows
@@ -187,17 +207,7 @@ async function getWebOAuthTokenFromConfig(cfg) {
   } catch {}
   return "";
 }
-self.bgLive = self.bgLive || {};
-(async () => {
-  async function fetchFollowingHTML() {
-    const res = await fetch('https://www.twitch.tv/directory/following/live', { credentials: 'include', cache: 'no-cache' });
-    const html = await res.text();
-    const re = /"login":"([a-z0-9_]+)","isLive":true/gi;
-    const out = new Set(); let m; while ((m = re.exec(html))) out.add(m[1].toLowerCase());
-    return out;
-  }
-  self.bgLive.getLiveNowByConfigSafe = async function(settings){ return await fetchFollowingHTML(); };
-})();
+// Removed overriding definition
 async function gqlFollowingLiveLoginsWithToken(userToken) {
   if (!userToken) return [];
   const body = [{
@@ -236,6 +246,28 @@ async function gqlFollowingLiveLoginsWithToken(userToken) {
     return [...out];
   } catch { return []; }
 }
+
+async function ttmGetLiveSet(cfg) {
+  const follows = (cfg.follows||[]).map(s=>s.toLowerCase());
+  const prio = (cfg.priority||[]).map(s=>s.toLowerCase());
+  const union = Array.from(new Set([...follows, ...prio]));
+  if (!cfg.client_id || !cfg.access_token || union.length === 0) return new Set();
+
+  const logins = union.slice(0, 100);
+  const q = logins.map(l => 'user_login=' + encodeURIComponent(l)).join('&');
+  const r = await fetch('https://api.twitch.tv/helix/streams?'+q, {
+    headers: { 'Client-ID': cfg.client_id, 'Authorization': 'Bearer ' + cfg.access_token }
+  });
+  if (!r.ok) throw new Error('helix ' + r.status);
+  const j = await r.json();
+  const live = new Set(j.data.map(d => String(d.user_login).toLowerCase()));
+  // priority-first ordering: keep this as a Set for reconcile
+  const ordered = [...prio.filter(x=>live.has(x)), ...union.filter(x=>!prio.includes(x)&&live.has(x))];
+  return new Set(ordered);
+}
+
+
+// Removed duplicate definition
 
   async function htmlScrapeViaTab() {
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -286,21 +318,70 @@ async function gqlFollowingLiveLoginsWithToken(userToken) {
   let lastTabScrapeAt = 0;
 
 L.getLiveNowByConfigSafe = async function (cfg) {
-  const tok = await getWebOAuthTokenFromConfig(cfg);
-  if (tok) {
-    const viaGql = await gqlFollowingLiveLoginsWithToken(tok);
-    if (viaGql.length > 0) return new Set(viaGql);
+  try {
+    const followCounts = {
+      follows: Array.isArray(cfg?.follows) ? cfg.follows.length : 0,
+      priority: Array.isArray(cfg?.priority) ? cfg.priority.length : 0,
+      followUnion: Array.isArray(cfg?.followUnion) ? cfg.followUnion.length : 0
+    };
+    
+    log('live_start', {
+      ...followCounts,
+      client_id: cfg?.client_id ? 'present' : 'missing',
+      access_token: cfg?.access_token ? 'present' : 'missing'
+    });
+
+    // If no channels configured, try following page first
+    if (followCounts.follows === 0 && followCounts.priority === 0) {
+      log('live_check', 'No channels configured, trying HTML following page');
+      const viaHtml = await htmlFetchFollowing();
+      if (viaHtml.length > 0) {
+        log('live_found', `Found ${viaHtml.length} live channels via HTML following page`);
+        return new Set(viaHtml);
+      }
+      log('live_check', 'HTML following page returned no results');
+    }
+
+    // Try oauth token auth methods
+    const tok = await getWebOAuthTokenFromConfig(cfg);
+    if (tok) {
+      log('live_check', 'Trying GQL method');
+      const viaGql = await gqlFollowingLiveLoginsWithToken(tok);
+      if (viaGql.length > 0) {
+        log('live_found', `Found ${viaGql.length} live channels via GQL`);
+        return new Set(viaGql);
+      }
+      log('live_check', 'GQL method returned no results');
+    }
+
+    // Only try probe if we have channels configured
+    if (followCounts.follows > 0 || followCounts.priority > 0) {
+      const cap = Number.isFinite(cfg?.max_tabs) ? cfg.max_tabs : 4;
+      log('live_check', `Trying probe method (cap: ${cap})`);
+      const viaProbe = await probeChannelPagesLive(cfg, cap);
+      if (viaProbe.length > 0) {
+        log('live_found', `Found ${viaProbe.length} live channels via probe`);
+        return new Set(viaProbe);
+      }
+      log('live_check', 'Probe method returned no results');
+    }
+
+    // Try HTML scraping as final fallback
+    log('live_check', 'Trying HTML method');
+    const viaHtml = await htmlFetchFollowing();
+    if (viaHtml.length > 0) {
+      log('live_found', `Found ${viaHtml.length} live channels via HTML`);
+      return new Set(viaHtml);
+    }
+    log('live_check', 'HTML method returned no results');
+
+    log('live_check', 'All detection methods failed');
+    return new Set();
+  } catch (e) {
+    log('live_error', String(e));
+    return new Set();
   }
+};
 
-  const cap = Number.isFinite(cfg?.max_tabs) ? cfg.max_tabs : 8;
-  const viaProbe = await probeChannelPagesLive(cfg, cap);
-  if (viaProbe.length > 0) return new Set(viaProbe);
-
-  const viaHtml = await htmlFetchFollowing();
-  if (viaHtml.length > 0) return new Set(viaHtml);
-
-  return new Set();
-  };
-
-  self.bgLive = L;
+self.bgLive = L;
 })();

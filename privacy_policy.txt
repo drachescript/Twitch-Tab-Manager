@@ -1,0 +1,78 @@
+# privacy_policy.txt — Twitch Tab Manager
+Last updated: 18 September 2025
+
+Summary
+Twitch Tab Manager runs locally in your browser to open/close Twitch tabs based on who is live, and (optionally) resume/unmute playback. We do not collect, sell, or share personal data. The extension does not use analytics, advertising, or any developer-controlled servers.
+
+What the extension does
+- Reads local configuration (either from Options storage, or optional files like config.json and follows.txt).
+- Uses Twitch’s official Helix API (from your browser) or the Following → Live page (HTML fallback) to determine who is live.
+- Can temporarily open the Following → Channels page as an active tab, auto-scroll it to read your followed usernames, then close it and restore your previous tab.
+- Opens/closes Twitch tabs for channels that are live, and injects a local helper script on twitch.tv to resume/unmute playback.
+
+Data we process
+- Local-only configuration: values such as client_id, locally-generated access_token, feature toggles, and your follows list. These remain on your device unless you export or share them.
+- Local runtime state: minimal flags (enabled/disabled), last poll time, and de-duplication state stored via extension storage.
+- Network requests: your browser talks directly to twitch.tv and api.twitch.tv over HTTPS.
+
+We do NOT collect
+- Account credentials
+- Browsing history outside twitch.tv
+- Personal identifiers sent to the developer
+- Advertising IDs
+- Any sale or sharing of data with third parties
+
+Permissions (why we need them)
+- tabs — open/close Twitch tabs and prevent duplicates.
+- storage — save the on/off toggle and minimal state (locally).
+- alarms — periodic background polling (MV3 service worker heartbeat).
+- scripting — inject a small helper (content_unmute.js) into twitch.tv to resume/unmute playback.
+- host_permissions (twitch.tv only) — required to interact with Twitch pages.
+
+Cookies & local storage
+The extension does not set tracking cookies. Limited state is stored using the browser’s extension storage (local to your device).
+
+Children’s privacy
+This extension is not directed to children under 13 and does not knowingly collect personal information.
+
+Security
+- All Twitch API calls use HTTPS.
+- Your tokens and follows remain local.
+- Do not publish your Client Secret or access token publicly; rotate tokens if exposed.
+
+Data retention & deletion
+All data is local. To remove it, delete the optional files, clear the extension’s storage (Options → Reset to Packaged / browser extension settings), or uninstall the extension.
+
+Changes to this policy
+This policy may be updated to reflect improvements or Chrome Web Store requirements. The “Last updated” date will be revised accordingly.
+
+Contact
+For questions or requests about this policy, contact: <your contact email or Discord handle here>
+
+——
+
+Chrome Web Store — Data Safety Answers (copy/paste)
+• Does your extension collect or share any user data?  No.  
+• Types of data collected:  None.  
+• Is data shared with third parties?  No.  
+• Is data processed ephemerally?  Not applicable (no data collected).  
+• Is data encrypted in transit?  Yes — browser connects to Twitch over HTTPS.  
+• Data deletion request mechanism:  All data is local; remove local files, clear extension storage, or uninstall.
+
+Store Listing — Permissions Rationale
+This extension only operates on twitch.tv:
+- tabs: open/close stream tabs and dedupe
+- storage: local preferences and state
+- alarms: periodic checks
+- scripting: unmute/resume helper on twitch.tv
+- host_permissions (twitch.tv only): required for page interaction
+
+Store Listing — Short Privacy Blurb
+We don’t collect, sell, or share personal data. All configuration stays on your device. The extension talks directly to Twitch over HTTPS and never sends data to developer-controlled servers.
+
+Terms of Use — Twitch Tab Manager
+By installing or using this extension you agree:
+- The extension is provided “as is”, without warranties of any kind.
+- The developer is not liable for damages arising from use or inability to use the extension.
+- You are responsible for safeguarding your Twitch tokens and Client Secret; replace tokens if exposed.
+If you do not agree, uninstall the extension.

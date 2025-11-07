@@ -1,4 +1,29 @@
 // bg.core.js
+self.TTM = self.TTM || {};
+TTM.state = TTM.state || { enabled: true, nextPollAt: 0 };
+
+TTM.setEnabled = async (on) => {
+  TTM.state.enabled = !!on;
+  await chrome.storage.local.set({ ttm_enabled: TTM.state.enabled });
+  if (TTM.state.enabled) TTM.armAlarm();
+  else chrome.alarms.clear('ttm-tick');
+};
+
+TTM.armAlarm = () => {
+  const interval = (TTM.config?.check_interval_sec ?? 60) || 60;
+  chrome.alarms.create('ttm-tick', { periodInMinutes: Math.max(1, interval / 60) });
+};
+
+// Alarm listener registered in background
+
+// Init on install/startup
+(async () => {
+  const { ttm_enabled } = await chrome.storage.local.get('ttm_enabled');
+  TTM.state.enabled = (typeof ttm_enabled === 'boolean') ? ttm_enabled : true;
+  await TTM.reloadConfig?.();
+  if (TTM.state.enabled) TTM.armAlarm();
+  console.log('[TTM] ready; enabled=', TTM.state.enabled);
+})();
 
 export const DEFAULTS = {
   enabled: true,
@@ -83,7 +108,7 @@ export async function diagnose() {
 export async function armAlarm() {
   const everySec = Math.max(15, Number(state.settings.check_interval_sec || 60));
   await chrome.alarms.clear("ttm-tick");
-  chrome.alarms.create("ttm-tick", { periodInMinutes: everySec / 60 });
+  chrome.alarms.create("ttm-tick", { periodInMinutes: Math.max(1, everySec / 60) });
   state.nextCheckAt = Date.now() + everySec * 1000;
   log("alarm_armed", { everySec });
 }

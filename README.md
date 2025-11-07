@@ -212,11 +212,17 @@ Full policy: [https://docs.google.com/document/d/1SkvBWapQawvzuhaYT-iHOoUSV0go4P
 
 All notable changes use `DD/MM/YYYY`.
 
-### [1.0.6] — Unreleased
+### [1.0.7] — Unreleased
+
+
+* **Note**: If you want to **try WIP features for 1.0.6**, ask for the files.
+
+
+### [1.0.6] — 06/11/2025
 
 * **Priority**: Added priority so it will first open ur priority streamers before ur follows also added Options textarea + popup **Add/Remove** when ur on a streamer page.
-* **Smaller fixes**: Better offline detection, added Diagnostics for debugging, max tabs broken fix, fixed polling active streamers, better "human" interactions with twitch and others.
-* **Note**: If you want to **try WIP features for 1.0.6**, ask for the files.
+* **Smaller fixes**: better offline detection, stricter max tabs, sturdier polling, more “human” Twitch interactions, plus Diagnostics for quick debugging.
+
 
 ### [1.0.5] — 30/10/2025
 
@@ -257,6 +263,7 @@ All notable changes use `DD/MM/YYYY`.
 * **Auto-claim**: Moments + Channel Points (no Drops).
 * Raid/host handling: hold raid tabs briefly, then respect priority/limits.
 * Debug tab (Options): recent errors/actions with **Copy to clipboard**.
+* **Priority preemption**: when full, replace the lowest-priority/non-priority tab if a priority channel goes live.
 
 ```
 

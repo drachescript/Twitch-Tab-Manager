@@ -5,7 +5,7 @@ export async function loadConfig() {
     force_resume: true,
     check_interval_sec: 60,
     unmute_streams: true,
-    max_tabs: 8,
+    max_tabs: 4,
     blacklist: [],
     // New: select live source. "auto" tries helix, falls back to following_html.
     live_source: "auto"
@@ -26,7 +26,7 @@ export async function loadConfig() {
 
   // Guards
   if (typeof cfg.check_interval_sec !== "number" || cfg.check_interval_sec < 10) cfg.check_interval_sec = 60;
-  if (typeof cfg.max_tabs !== "number" || cfg.max_tabs < 1) cfg.max_tabs = 8;
+  if (typeof cfg.max_tabs !== "number" || cfg.max_tabs < 1) cfg.max_tabs = 4;
   if (!Array.isArray(cfg.blacklist)) cfg.blacklist = [];
   if (!["auto","helix","following_html"].includes((cfg.live_source||"").toLowerCase())) cfg.live_source = "auto";
 

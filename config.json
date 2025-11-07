@@ -1,9 +1,16 @@
 {
+  "live_source": "auto",
   "client_id": "YOUR_TWITCH_CLIENT_ID",
   "access_token": "YOUR_APP_ACCESS_TOKEN",
-  "force_unmute": true,
+  "force_unmute": false,
+  "unmute_streams": false,
   "force_resume": true,
+  "autoplay_streams": false,
   "check_interval_sec": 60,
-  "unmute_streams": true,
-  "max_tabs": 8
+  "max_tabs": 4,
+  "enabled": true,
+  "followUnion": [],
+  "follows": [],
+  "priority": [],
+    "blacklist": []
 }
