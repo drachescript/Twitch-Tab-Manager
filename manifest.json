@@ -1,21 +1,25 @@
 {
   "manifest_version": 3,
   "name": "Twitch Tab Manager",
-  "version": "1.0.6",
+  "description": "Opens a set of your followed Twitch channels, keeps them alive, and cleans up offline tabs.",
+  "version": "1.0.7",
   "action": { "default_popup": "popup.html", "default_title": "Twitch Tab Manager" },
-  "background": { "service_worker": "background.js", "type": "module" },
-  "options_page": "options.html",
-  "permissions": ["tabs","storage","alarms","scripting","downloads","cookies"],
-  "host_permissions": ["*://www.twitch.tv/*","*://twitch.tv/*","*://api.twitch.tv/*","*://id.twitch.tv/*"],
-
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
   "web_accessible_resources": [{
     "resources": [
       "config.json",
       "follows.txt",
+      "bg.stability.js",
       "assets/*"
     ],
     "matches": ["*://*/*"]
   }],
+  "options_page": "options.html",
+  "permissions": ["tabs","storage","alarms","scripting","downloads","cookies"],
+  "host_permissions": ["*://www.twitch.tv/*","*://twitch.tv/*","*://api.twitch.tv/*","*://id.twitch.tv/*"],
 
   "icons": {  "16": "icons/icon16.png","32": "icons/icon32.png", "192": "icons/icon192.png" }
 }

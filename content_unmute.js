@@ -1,79 +1,234 @@
-// content_unmute.js 
 (() => {
-  const JITTER = () => 300 + Math.floor(Math.random() * 450);
-  let tries = 0, maxTries = 12, done = false;
+  if (window.__TTM_PLAYER_HELPER__) return;
+  window.__TTM_PLAYER_HELPER__ = true;
 
-  const q = (sel, root = document) => {
-    try { return root.querySelector(sel); } catch { return null; }
+  const $ = (sel) => document.querySelector(sel);
+
+  const state = {
+    settings: {
+      force_unmute: false,
+      unmute_streams: false,
+      force_resume: false,
+      autoplay_streams: false
+    },
+    loopStarted: false,
+    lastStatusSentAt: 0
   };
 
-  function findVideo() {
-    const v = q('video');
-    if (v) return v;
-    const roots = document.querySelectorAll(
-      '[data-a-target="player-overlay-root"], .video-player, .persistent-player'
-    );
-    for (const r of roots) {
-      const nv = r.querySelector?.('video');
-      if (nv) return nv;
-    }
-    return null;
+  function wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  function tryUiUnmute() {
-    const btn = q('button[data-a-target="player-mute-unmute-button"]');
-    if (!btn) return false;
-    try { btn.click(); return true; } catch { return false; }
-  }
-
-  function onVisibleOnce(fn) {
-    const h = () => { document.removeEventListener('visibilitychange', h); setTimeout(fn, JITTER()); };
-    document.addEventListener('visibilitychange', h);
-  }
-
-  async function unmuteIfSafe(video) {
-    // If already playing & unmuted, we’re done
-    if (!video.paused && !video.muted) { done = true; return; }
-
-    // If the tab is hidden, defer any UI interaction to avoid autoplay NotAllowed
-    if (document.visibilityState !== 'visible') { onVisibleOnce(tick); return; }
-
-    // First, try Twitch’s own UI toggle (harmless if already unmuted)
-    tryUiUnmute();
-
-    // Clear muted flags gently; don’t force play here
-    try { video.muted = false; video.removeAttribute('muted'); } catch {}
-
-    // If volume is zero, nudge slightly (keeps it quiet but audible)
-    if (typeof video.volume === 'number' && video.volume === 0) {
-      try { video.volume = 0.2; } catch {}
-    }
-
-    // If it’s already playing, avoid calling play() to prevent the warning
-    if (!video.paused) { done = !video.muted; return; }
-
-    // If paused, *only* attempt play when visible (we are), wrapped in try/catch
+  function isOnChannelPage() {
     try {
-      const p = video.play?.();
-      if (p && typeof p.then === 'function') await p;
+      const url = new URL(location.href);
+      if (url.hostname !== "www.twitch.tv") return false;
+
+      const first = url.pathname.split("/").filter(Boolean)[0] || "";
+      const blocked = new Set([
+        "directory",
+        "p",
+        "videos",
+        "friends",
+        "inventory",
+        "drops",
+        "settings",
+        "messages",
+        "login",
+        "logout",
+        "downloads",
+        "moderator"
+      ]);
+
+      return !!first && !blocked.has(first);
     } catch {
-      // Don’t loop on NotAllowed; wait for next visibility change/user gesture
-      onVisibleOnce(tick);
+      return false;
+    }
+  }
+
+  function isAdPlaying() {
+    return !!(
+      document.querySelector('[data-test-selector="ad-banner-default-text"]') ||
+      document.querySelector('[data-a-player-state="advertising"]')
+    );
+  }
+
+  function getVideo() {
+    return $("video");
+  }
+
+  function getMuteButton() {
+    return $('[data-a-target="player-mute-unmute-button"]');
+  }
+
+  function getPlayButton() {
+    return $('[data-a-target="player-play-pause-button"]');
+  }
+
+  function getChannelLogin() {
+    try {
+      const url = new URL(location.href);
+      return (url.pathname.split("/").filter(Boolean)[0] || "").toLowerCase();
+    } catch {
+      return "";
+    }
+  }
+
+  function canSafelyForceUnmute() {
+    return !document.hidden && document.hasFocus();
+  }
+
+  async function clickUnmuteIfNeeded() {
+    const btn = getMuteButton();
+    if (!btn) return false;
+
+    const label = btn.getAttribute("aria-label") || "";
+    if (/unmute/i.test(label)) {
+      btn.click();
+      return true;
+    }
+
+    return false;
+  }
+
+  async function clickPlayIfNeeded() {
+    const btn = getPlayButton();
+    if (!btn) return false;
+
+    const label = btn.getAttribute("aria-label") || "";
+    if (/play/i.test(label)) {
+      btn.click();
+      return true;
+    }
+
+    return false;
+  }
+
+  function collectStatus() {
+    const video = getVideo();
+    const ad = isAdPlaying();
+
+    return {
+      login: getChannelLogin(),
+      url: location.href,
+      hasVideo: !!video,
+      paused: !!video?.paused,
+      muted: !!video?.muted,
+      volume: typeof video?.volume === "number" ? video.volume : null,
+      adPlaying: ad,
+      visible: !document.hidden,
+      focused: document.hasFocus()
+    };
+  }
+
+  function shouldSendStatus(force = false) {
+    const now = Date.now();
+
+    if (force) {
+      state.lastStatusSentAt = now;
+      return true;
+    }
+
+    if (now - state.lastStatusSentAt >= 5000) {
+      state.lastStatusSentAt = now;
+      return true;
+    }
+
+    return false;
+  }
+
+  async function sendStatus(force = false) {
+    if (!isOnChannelPage()) return;
+    if (!shouldSendStatus(force)) return;
+
+    try {
+      chrome.runtime.sendMessage({
+        type: "TTM_PLAYER_STATUS",
+        ...collectStatus()
+      }, () => {});
+    } catch {}
+  }
+
+  async function enforceOnce() {
+    if (!isOnChannelPage()) return;
+
+    if (isAdPlaying()) {
+      await sendStatus();
       return;
     }
-    done = !video.muted;
+
+    const opts = state.settings || {};
+    const video = getVideo();
+
+    if (opts.force_unmute || opts.unmute_streams) {
+      await clickUnmuteIfNeeded();
+
+      // Do not force video.muted = false in a background tab.
+      // Chrome can treat that like autoplay-with-sound and pause playback.
+      if (video && canSafelyForceUnmute()) {
+        try {
+          video.muted = false;
+        } catch {}
+      }
+    }
+
+    if (opts.force_resume || opts.autoplay_streams) {
+      await clickPlayIfNeeded();
+
+      if (video?.paused) {
+        try {
+          await video.play();
+        } catch {}
+      }
+    }
+
+    await sendStatus();
   }
 
-  function tick() {
-    if (done) return;
-    if (tries++ > maxTries) return;
+  async function startLoop() {
+    if (state.loopStarted) return;
+    state.loopStarted = true;
 
-    const video = findVideo();
-    if (!video) { setTimeout(tick, JITTER()); return; }
-
-    unmuteIfSafe(video);
-    if (!done) setTimeout(tick, JITTER());
+    while (true) {
+      try {
+        await enforceOnce();
+      } catch {}
+      await wait(2500);
+    }
   }
 
-  setTimeout(tick, JITTER());
+  document.addEventListener("visibilitychange", () => {
+    enforceOnce().catch(() => {});
+  });
+
+  window.addEventListener("focus", () => {
+    enforceOnce().catch(() => {});
+  });
+
+  window.addEventListener("pageshow", () => {
+    enforceOnce().catch(() => {});
+  });
+
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg?.type === "TTM_ENFORCE" && msg?.settings) {
+      state.settings = { ...state.settings, ...msg.settings };
+      enforceOnce().catch(() => {});
+      startLoop().catch(() => {});
+      sendResponse?.({ ok: true });
+      return true;
+    }
+
+    if (msg?.type === "TTM_ENFORCE_NOW") {
+      enforceOnce().catch(() => {});
+      sendResponse?.({ ok: true });
+      return true;
+    }
+
+    if (msg?.type === "TTM_GET_PLAYER_STATUS") {
+      sendResponse?.({ ok: true, ...collectStatus() });
+      return true;
+    }
+  });
+
+  startLoop().catch(() => {});
 })();

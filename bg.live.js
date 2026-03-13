@@ -331,6 +331,10 @@ L.getLiveNowByConfigSafe = async function (cfg) {
       access_token: cfg?.access_token ? 'present' : 'missing'
     });
 
+    // Keep tab registry up to date
+    const allTwitchTabs = await chrome.tabs.query({ url: ['https://www.twitch.tv/*'] });
+    TTM_STAB?.onTabsSnapshot(allTwitchTabs);
+
     // If no channels configured, try following page first
     if (followCounts.follows === 0 && followCounts.priority === 0) {
       log('live_check', 'No channels configured, trying HTML following page');
@@ -341,7 +345,15 @@ L.getLiveNowByConfigSafe = async function (cfg) {
       }
       log('live_check', 'HTML following page returned no results');
     }
-
+        if (followCounts.follows > 0 && cfg?.client_id && cfg?.access_token) {
+      log("live_check", "Trying Helix method");
+      const viaHelix = await helixGetLiveLogins(cfg);
+      if (viaHelix.length > 0) {
+        log("live_found", `Found ${viaHelix.length} live channels via Helix`);
+        return new Set(viaHelix);
+      }
+      log("live_check", "Helix method returned no results");
+    }
     // Try oauth token auth methods
     const tok = await getWebOAuthTokenFromConfig(cfg);
     if (tok) {

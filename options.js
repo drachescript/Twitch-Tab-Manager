@@ -1,171 +1,207 @@
-// options.js 
-const $ = s => document.querySelector(s);
-const cfgTA = $("#cfg"), folTA = $("#fol");
-const cfgStatus = $("#cfgStatus"), folStatus = $("#folStatus");
+const $ = (sel) => document.querySelector(sel);
 
-// tabs
-document.querySelectorAll(".tab").forEach(t => {
-  t.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
-    document.querySelectorAll(".panel").forEach(x => x.classList.remove("active"));
-    t.classList.add("active");
-    document.getElementById("panel-" + t.dataset.tab).classList.add("active");
-  });
-});
+const cfgTA = $("#cfg");
+const folTA = $("#fol");
+const cfgStatus = $("#cfgStatus");
+const folStatus = $("#folStatus");
 
-const ok = (el,msg)=>{ if(!el) return; el.textContent=msg; el.className="status ok";
-  setTimeout(()=>{el.textContent=""; el.className="status";},2200); };
-const err = (el,msg)=>{ if(!el) return; el.textContent=msg; el.className="status err";
-  setTimeout(()=>{el.textContent=""; el.className="status";},3200); };
-
-// packaged fallbacks (only used for "Reset to Packaged")
-async function packagedCfg(){ try{ return await fetch(chrome.runtime.getURL("config.json")).then(r=>r.json()); }catch{ return {}; } }
-async function packagedFollows(){ try{ const t=await fetch(chrome.runtime.getURL("follows.txt")).then(r=>r.text());
-  return t.split("\n").map(s=>s.trim().toLowerCase()).filter(Boolean);}catch{ return []; } }
-
-// keep your existing keys; allow space for newer ones
 const CFG_DEFAULT = {
   live_source: "auto",
-  client_id: "",
-  access_token: "",
   force_unmute: true,
   unmute_streams: true,
   force_resume: true,
   autoplay_streams: false,
   check_interval_sec: 60,
-  max_tabs: 8,
+  max_tabs: 4,
+  enabled: true,
+  followUnion: [],
+  follows: [],
+  priority: [],
   blacklist: []
 };
-
-function mergeDefaults(j){ return { ...CFG_DEFAULT, ...(j||{}) }; }
-
-// Load UI from storage (prefer top-level; fallback to nested config)
-async function loadUI(){
-  const s = await new Promise(r => chrome.storage.local.get(null, r));
-  const cfg = mergeDefaults(s.config ?? s); // textarea shows what you'll save
-  cfgTA.value = JSON.stringify(cfg, null, 2);
-  const follows = Array.isArray(s.follows) ? s.follows : await packagedFollows();
-  folTA.value = follows.join("\n");
+async function showManifestVersion() {
+  try {
+    const manifest = chrome.runtime.getManifest();
+    const el = document.getElementById("versionLine");
+    if (!el) return;
+    el.textContent = `Version: ${manifest.version}`;
+  } catch {}
 }
-await loadUI();
-
-// Write BOTH: top-level keys (background consumes) AND nested {config: ...} for UI/compat
-async function writeConfigBoth(j){
-  const flat = mergeDefaults(j);
-  await chrome.storage.local.set({ ...flat, config: flat });
+function showStatus(el, text, kind = "ok", ms = 2600) {
+  if (!el) return;
+  el.textContent = text;
+  el.className = `status ${kind}`;
+  window.clearTimeout(el._ttmTimer);
+  el._ttmTimer = window.setTimeout(() => {
+    el.textContent = "";
+    el.className = "status";
+  }, ms);
 }
 
-// config save / apply & reload
-$("#saveCfg").addEventListener("click", async ()=>{
-  try{
-    const j = JSON.parse(cfgTA.value);
-    await writeConfigBoth(j);
-    ok(cfgStatus,"Saved.");
-  } catch{ err(cfgStatus,"Invalid JSON."); }
-});
+function ok(el, text, ms) {
+  showStatus(el, text, "ok", ms);
+}
 
-$("#applyReload").addEventListener("click", async ()=>{
-  try{
-    const j = JSON.parse(cfgTA.value);
-    await writeConfigBoth(j);
-    chrome.runtime.sendMessage({type:"TTM_RELOAD_CONFIG"}, ()=>ok(cfgStatus,"Applied & reloaded."));
-  } catch{ err(cfgStatus,"Invalid JSON."); }
-});
+function err(el, text, ms) {
+  showStatus(el, text, "err", ms || 3400);
+}
 
-// export
-const dl=(n,c,t)=>{ const u=URL.createObjectURL(new Blob([c],{type:t}));
-  if (chrome.downloads?.download) chrome.downloads.download({url:u,filename:n,saveAs:true},()=>URL.revokeObjectURL(u));
-  else { const a=document.createElement("a"); a.href=u; a.download=n; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(u); }
-};
-$("#exportCfg").addEventListener("click",()=>dl("config.json",cfgTA.value,"application/json"));
-$("#exportFol").addEventListener("click",()=>dl("follows.txt",folTA.value,"text/plain"));
-// import
-const fileCfg=$("#fileCfg"), fileFol=$("#fileFol");
-const readText=f=>new Promise((res,rej)=>{ const fr=new FileReader();
-  fr.onload=()=>res(String(fr.result||"")); fr.onerror=()=>rej(fr.error||new Error()); fr.readAsText(f); });
-$("#importCfg").addEventListener("click",()=>fileCfg.click());
-$("#importFol").addEventListener("click",()=>fileFol.click());
+function normalizeName(value) {
+  return String(value || "").trim().toLowerCase();
+}
 
-fileCfg.addEventListener("change", async e=>{
-  try{
-    const f=e.target.files?.[0]; if(!f) return;
-    const j=mergeDefaults(JSON.parse(await readText(f)));
-    cfgTA.value=JSON.stringify(j,null,2);
-    await writeConfigBoth(j);
-    ok(cfgStatus,"Imported + saved.");
-  } catch{ err(cfgStatus,"Import failed/invalid."); }
-  fileCfg.value="";
-});
+function uniqNames(list) {
+  return [...new Set((list || []).map(normalizeName).filter(Boolean))];
+}
 
-fileFol.addEventListener("change", async e=>{
-  try{
-    const f=e.target.files?.[0]; if(!f) return;
-    const t=(await readText(f)).replace(/\r\n/g,"\n");
-    const lines=t.split("\n").map(s=>s.trim().toLowerCase()).filter(Boolean);
-    folTA.value=lines.join("\n");
-    await chrome.storage.local.set({follows:lines});
-    ok(folStatus,"Imported + saved.");
-  } catch{ err(folStatus,"Import failed."); }
-  fileFol.value="";
-});
+function mergeDefaults(obj) {
+  return { ...CFG_DEFAULT, ...(obj || {}) };
+}
 
-// follows save
-$("#saveFol").addEventListener("click", async ()=>{
-  const lines=folTA.value.split("\n").map(s=>s.trim().toLowerCase())
-    .filter((v,i,a)=>v && a.indexOf(v)===i);
-  await chrome.storage.local.set({follows:lines.sort()});
-  ok(folStatus,"Saved.");
-});
+function parseBool(value, fallback = false) {
+  if (value === true || value === false) return value;
+  if (typeof value === "string") {
+    const v = value.trim().toLowerCase();
+    if (v === "true") return true;
+    if (v === "false") return false;
+  }
+  return fallback;
+}
 
-// Fetch My Follows (background must handle TTM_FETCH_FOLLOWS)
-$("#fetchFollows").addEventListener("click", ()=>{
-  const btn = $("#fetchFollows");
-  const mode = $("#fetchMode").value || "active";
-  btn.disabled = true;
-  chrome.runtime.sendMessage({ type: "TTM_FETCH_FOLLOWS", mode }, (resp)=>{
-    btn.disabled = false;
-    if (!resp || !resp.ok) { err(folStatus,"Fetch failed."); return; }
-    const list = (resp.usernames || []).map(s=>s.toLowerCase()).filter(Boolean).sort();
-    folTA.value = list.join("\n");
-    chrome.storage.local.set({ follows: list });
-    ok(folStatus, `Fetched ${list.length} usernames.`);
+function clampConfig(input) {
+  const cfg = mergeDefaults(input);
+
+  cfg.enabled = parseBool(cfg.enabled, true);
+  cfg.force_unmute = parseBool(cfg.force_unmute, true);
+  cfg.unmute_streams = parseBool(cfg.unmute_streams, true);
+  cfg.force_resume = parseBool(cfg.force_resume, true);
+  cfg.autoplay_streams = parseBool(cfg.autoplay_streams, false);
+
+  cfg.check_interval_sec = Math.max(10, Number(cfg.check_interval_sec || 60) || 60);
+  cfg.max_tabs = Math.max(1, Number(cfg.max_tabs || 4) || 4);
+
+  cfg.follows = uniqNames(cfg.follows);
+  cfg.priority = uniqNames(cfg.priority);
+  cfg.followUnion = uniqNames([...(cfg.follows || []), ...(cfg.priority || [])]);
+  cfg.blacklist = uniqNames(cfg.blacklist);
+
+  return cfg;
+}
+
+async function packagedConfig() {
+  try {
+    const res = await fetch(chrome.runtime.getURL("config.json"));
+    if (!res.ok) return {};
+    return await res.json();
+  } catch {
+    return {};
+  }
+}
+
+async function packagedFollows() {
+  try {
+    const res = await fetch(chrome.runtime.getURL("follows.txt"));
+    if (!res.ok) return [];
+    const text = await res.text();
+    return uniqNames(text.replace(/\r\n/g, "\n").split("\n"));
+  } catch {
+    return [];
+  }
+}
+
+async function readStorage() {
+  return await new Promise((resolve) => chrome.storage.local.get(null, resolve));
+}
+
+function getStoredConfig(bag) {
+  return clampConfig(bag.settings ?? bag.config ?? bag);
+}
+
+async function writeConfigEverywhere(rawCfg) {
+  const cfg = clampConfig(rawCfg);
+
+  await chrome.storage.local.set({
+    settings: cfg,
+    config: cfg,
+    enabled: cfg.enabled,
+    live_source: cfg.live_source,
+    force_unmute: cfg.force_unmute,
+    unmute_streams: cfg.unmute_streams,
+    force_resume: cfg.force_resume,
+    autoplay_streams: cfg.autoplay_streams,
+    check_interval_sec: cfg.check_interval_sec,
+    max_tabs: cfg.max_tabs,
+    follows: cfg.follows,
+    priority: cfg.priority,
+    followUnion: cfg.followUnion,
+    blacklist: cfg.blacklist,
+    follows_count: cfg.follows.length,
+    priority_count: cfg.priority.length,
+    followUnion_count: cfg.followUnion.length
   });
-});
 
-// quick actions
-$("#forcePoll").addEventListener("click",()=>chrome.runtime.sendMessage({type:"TTM_FORCE_POLL"},()=>{}));
-$("#reloadConfig").addEventListener("click",()=>chrome.runtime.sendMessage({type:"TTM_RELOAD_CONFIG"},()=>{}));
-$("#refreshCfg").addEventListener("click",async()=>{
-  const s=await new Promise(r=>chrome.storage.local.get(null,r));
-  const cfg = mergeDefaults(s.config ?? s);
-  cfgTA.value=JSON.stringify(cfg,null,2);
-  ok(cfgStatus,"Refreshed.");
-});
-$("#refreshFol").addEventListener("click",async()=>{
-  const s=await new Promise(r=>chrome.storage.local.get(["follows"],r));
-  folTA.value=(s.follows??[]).join("\n");
-  ok(folStatus,"Refreshed.");
-});
+  return cfg;
+}
 
-// NEW: Reset to Packaged (wires buttons present in HTML)
-$("#resetCfg").addEventListener("click", async ()=>{
-  const base = mergeDefaults(await packagedCfg());
-  cfgTA.value = JSON.stringify(base, null, 2);
-  await writeConfigBoth(base);
-  ok(cfgStatus,"Reset to packaged & saved.");
-});
-$("#resetFol").addEventListener("click", async ()=>{
-  const base = await packagedFollows();
-  folTA.value = base.join("\n");
-  await chrome.storage.local.set({ follows: base });
-  ok(folStatus,"Reset to packaged & saved.");
-});
+async function loadUI() {
+  const bag = await readStorage();
+  const cfg = getStoredConfig(bag);
+  const follows = Array.isArray(bag.follows) && bag.follows.length ? uniqNames(bag.follows) : cfg.follows.length ? cfg.follows : await packagedFollows();
+  const priority = Array.isArray(bag.priority) && bag.priority.length ? uniqNames(bag.priority) : cfg.priority;
 
-// -------- Token snippet helpers (kept) --------
-const cid = $("#cid"), cs = $("#csecret"), ps1Out = $("#ps1Out"), curlOut = $("#curlOut");
-function buildPS1(id, secret){
-  return `$client_id = "${id}"
-$client_secret = "${secret}"
+  cfgTA.value = JSON.stringify({ ...cfg, follows, priority, followUnion: uniqNames([...follows, ...priority]) }, null, 2);
+  folTA.value = follows.join("\n");
+
+  const priorityBox = $("#priorityBox");
+  if (priorityBox) priorityBox.value = priority.join("\n");
+
+  renderTokenSnippets();
+}
+
+function downloadText(filename, content, type) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  if (chrome.downloads?.download) {
+    chrome.downloads.download({ url, filename, saveAs: true }, () => URL.revokeObjectURL(url));
+    return;
+  }
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function readFileText(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result || ""));
+    fr.onerror = () => reject(fr.error || new Error("read failed"));
+    fr.readAsText(file);
+  });
+}
+
+function rpc(type, payload = {}) {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage({ type, ...payload }, (resp) => {
+        if (chrome.runtime.lastError) {
+          resolve({ ok: false, error: chrome.runtime.lastError.message });
+          return;
+        }
+        resolve(resp || { ok: true });
+      });
+    } catch (e) {
+      resolve({ ok: false, error: String(e) });
+    }
+  });
+}
+
+function buildPS1(clientId, clientSecret) {
+  return `$client_id = "${clientId}"
+$client_secret = "${clientSecret}"
 $body = @{
   client_id     = $client_id
   client_secret = $client_secret
@@ -174,93 +210,392 @@ $body = @{
 $response = Invoke-RestMethod -Method Post -Uri "https://id.twitch.tv/oauth2/token" -Body $body
 $response | Format-List`;
 }
-function buildCurl(id, secret){
-  return `curl -X POST "https://id.twitch.tv/oauth2/token" \
-  -d "client_id=${id}" \
-  -d "client_secret=${secret}" \
+
+function buildCurl(clientId, clientSecret) {
+  return `curl -X POST "https://id.twitch.tv/oauth2/token" \\
+  -d "client_id=${clientId}" \\
+  -d "client_secret=${clientSecret}" \\
   -d "grant_type=client_credentials"`;
 }
-function renderSnips(){
-  const id = (cid?.value || "").trim();
-  const sec = (cs?.value || "").trim();
-  ps1Out.value = buildPS1(id || "YOUR_CLIENT_ID_HERE", sec || "YOUR_CLIENT_SECRET_HERE");
-  curlOut.value = buildCurl(id || "YOUR_CLIENT_ID_HERE", sec || "YOUR_CLIENT_SECRET_HERE");
-}
-cid?.addEventListener("input", renderSnips);
-cs?.addEventListener("input", renderSnips);
-renderSnips();
 
-function rpc(type, payload={}) {
-  return new Promise(res=>{
+function renderTokenSnippets() {
+  const cid = $("#cid");
+  const csecret = $("#csecret");
+  const ps1Out = $("#ps1Out");
+  const curlOut = $("#curlOut");
+
+  if (!ps1Out || !curlOut) return;
+
+  const id = (cid?.value || "").trim() || "YOUR_CLIENT_ID_HERE";
+  const secret = (csecret?.value || "").trim() || "YOUR_CLIENT_SECRET_HERE";
+
+  ps1Out.value = buildPS1(id, secret);
+  curlOut.value = buildCurl(id, secret);
+}
+
+function updateConfigField(field, value) {
+  try {
+    const cfg = clampConfig(JSON.parse(cfgTA.value || "{}"));
+    cfg[field] = value;
+    cfgTA.value = JSON.stringify(clampConfig(cfg), null, 2);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function saveFollowsOnlyFromTextarea() {
+  const bag = await readStorage();
+  const cfg = getStoredConfig(bag);
+  const priority = Array.isArray(bag.priority) ? uniqNames(bag.priority) : cfg.priority;
+  const follows = uniqNames(folTA.value.split("\n"));
+  const nextCfg = clampConfig({ ...cfg, follows, priority, followUnion: uniqNames([...follows, ...priority]) });
+  await writeConfigEverywhere(nextCfg);
+  return nextCfg;
+}
+
+async function syncFetchedFollows(usernames) {
+  const fetched = uniqNames(usernames);
+  if (!fetched.length) {
+    err(folStatus, "Fetch returned 0 follows. Existing follows were kept.");
+    return null;
+  }
+
+  const bag = await readStorage();
+  const cfg = getStoredConfig(bag);
+
+  const currentFollows = uniqNames(Array.isArray(bag.follows) ? bag.follows : cfg.follows);
+  const priority = uniqNames(Array.isArray(bag.priority) ? bag.priority : cfg.priority);
+
+  const currentSet = new Set(currentFollows);
+  const fetchedSet = new Set(fetched);
+
+  const added = fetched.filter((name) => !currentSet.has(name));
+  const removed = currentFollows.filter((name) => !fetchedSet.has(name));
+  const followUnion = uniqNames([...fetched, ...priority]);
+
+  const nextCfg = clampConfig({
+    ...cfg,
+    follows: fetched,
+    priority,
+    followUnion
+  });
+
+  const entry = {
+    at: new Date().toISOString(),
+    added,
+    removed,
+    previous_count: currentFollows.length,
+    fetched_count: fetched.length,
+    final_follow_count: fetched.length
+  };
+
+  const previousHistory = Array.isArray(bag.followSyncLog?.history) ? bag.followSyncLog.history : [];
+  const followSyncLog = {
+    last_run_at: entry.at,
+    last_added: added,
+    last_removed: removed,
+    previous_count: currentFollows.length,
+    fetched_count: fetched.length,
+    final_follow_count: fetched.length,
+    history: [entry, ...previousHistory].slice(0, 20)
+  };
+
+  await writeConfigEverywhere(nextCfg);
+  await chrome.storage.local.set({ followSyncLog });
+
+  folTA.value = fetched.join("\n");
+  cfgTA.value = JSON.stringify(nextCfg, null, 2);
+
+  const addedText = added.length ? `Added: ${added.join(", ")}` : "Added: 0";
+  const removedText = removed.length ? `Removed: ${removed.join(", ")}` : "Removed: 0";
+  ok(folStatus, `Synced ${fetched.length} follows. ${addedText}. ${removedText}.`, 4200);
+
+  return followSyncLog;
+}
+
+function setupTabs() {
+  document.querySelectorAll(".tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
+      document.querySelectorAll(".panel").forEach((x) => x.classList.remove("active"));
+      tab.classList.add("active");
+      document.getElementById("panel-" + tab.dataset.tab)?.classList.add("active");
+    });
+  });
+}
+
+function setupConfigButtons() {
+  $("#saveCfg")?.addEventListener("click", async () => {
     try {
-      chrome.runtime.sendMessage({ type, ...payload }, (r)=>{
-        if (chrome.runtime.lastError) return res({ ok:false, error:chrome.runtime.lastError.message });
-        res(r||{ok:true});
-      });
-    } catch(e){ res({ ok:false, error:String(e) }); }
+      const cfg = clampConfig(JSON.parse(cfgTA.value));
+      await writeConfigEverywhere(cfg);
+      cfgTA.value = JSON.stringify(cfg, null, 2);
+      ok(cfgStatus, "Saved.");
+    } catch {
+      err(cfgStatus, "Invalid JSON.");
+    }
+  });
+
+  $("#applyReload")?.addEventListener("click", async () => {
+    try {
+      const cfg = clampConfig(JSON.parse(cfgTA.value));
+      await writeConfigEverywhere(cfg);
+      cfgTA.value = JSON.stringify(cfg, null, 2);
+      const resp = await rpc("ttm/reload_config");
+      if (resp?.ok) ok(cfgStatus, "Applied and reloaded.");
+      else err(cfgStatus, "Saved, but background reload failed.");
+    } catch {
+      err(cfgStatus, "Invalid JSON.");
+    }
+  });
+
+  $("#refreshCfg")?.addEventListener("click", async () => {
+    const bag = await readStorage();
+    cfgTA.value = JSON.stringify(getStoredConfig(bag), null, 2);
+    ok(cfgStatus, "Refreshed.");
+  });
+
+  $("#resetCfg")?.addEventListener("click", async () => {
+    const base = clampConfig(await packagedConfig());
+    await writeConfigEverywhere(base);
+    cfgTA.value = JSON.stringify(base, null, 2);
+    ok(cfgStatus, "Reset to packaged values.");
+  });
+
+  $("#exportCfg")?.addEventListener("click", () => {
+    downloadText("config.json", cfgTA.value, "application/json");
+  });
+
+  const fileCfg = $("#fileCfg");
+  $("#importCfg")?.addEventListener("click", () => fileCfg?.click());
+
+  fileCfg?.addEventListener("change", async (event) => {
+    try {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      const text = await readFileText(file);
+      const cfg = clampConfig(JSON.parse(text));
+      await writeConfigEverywhere(cfg);
+      cfgTA.value = JSON.stringify(cfg, null, 2);
+      ok(cfgStatus, "Imported and saved.");
+    } catch {
+      err(cfgStatus, "Import failed.");
+    }
+    fileCfg.value = "";
   });
 }
-document.getElementById('btnForcePoll')?.addEventListener('click', async ()=>{
-  await rpc('TTM_FORCE_POLL'); // bypasses enabled guard
-});
-document.getElementById('btnReloadCfg')?.addEventListener('click', async ()=>{
-  await rpc('TTM_RELOAD_CONFIG');
-});
 
-// Priority editor (kept)
-(function setupPriorityUI(){
-  const box = document.getElementById("priorityBox");
-  const save = document.getElementById("prioritySave");
+function setupFollowButtons() {
+  $("#saveFol")?.addEventListener("click", async () => {
+    await saveFollowsOnlyFromTextarea();
+    ok(folStatus, "Saved.");
+  });
+
+  $("#refreshFol")?.addEventListener("click", async () => {
+    const bag = await readStorage();
+    const cfg = getStoredConfig(bag);
+    const follows = uniqNames(Array.isArray(bag.follows) ? bag.follows : cfg.follows);
+    folTA.value = follows.join("\n");
+    ok(folStatus, "Refreshed.");
+  });
+
+  $("#resetFol")?.addEventListener("click", async () => {
+    const follows = await packagedFollows();
+    const bag = await readStorage();
+    const cfg = getStoredConfig(bag);
+    const priority = uniqNames(Array.isArray(bag.priority) ? bag.priority : cfg.priority);
+    const nextCfg = clampConfig({ ...cfg, follows, priority, followUnion: uniqNames([...follows, ...priority]) });
+    await writeConfigEverywhere(nextCfg);
+    folTA.value = follows.join("\n");
+    cfgTA.value = JSON.stringify(nextCfg, null, 2);
+    ok(folStatus, "Reset to packaged values.");
+  });
+
+  $("#exportFol")?.addEventListener("click", () => {
+    downloadText("follows.txt", folTA.value, "text/plain");
+  });
+
+  const fileFol = $("#fileFol");
+  $("#importFol")?.addEventListener("click", () => fileFol?.click());
+
+  fileFol?.addEventListener("change", async (event) => {
+    try {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      const text = await readFileText(file);
+      folTA.value = uniqNames(text.replace(/\r\n/g, "\n").split("\n")).join("\n");
+      await saveFollowsOnlyFromTextarea();
+      ok(folStatus, "Imported and saved.");
+    } catch {
+      err(folStatus, "Import failed.");
+    }
+    fileFol.value = "";
+  });
+
+  $("#fetchFollows")?.addEventListener("click", async () => {
+    const btn = $("#fetchFollows");
+    const mode = $("#fetchMode")?.value || "active";
+
+    if (btn) btn.disabled = true;
+    const resp = await rpc("TTM_FETCH_FOLLOWS", { mode });
+    if (btn) btn.disabled = false;
+
+    if (!resp?.ok) {
+      err(folStatus, resp?.error ? `Fetch failed: ${resp.error}` : "Fetch failed.");
+      return;
+    }
+
+    await syncFetchedFollows(resp.usernames || []);
+  });
+
+  $("#forcePoll")?.addEventListener("click", async () => {
+    await rpc("ttm/force_poll");
+    ok(folStatus, "Poll queued.");
+  });
+
+  $("#reloadConfig")?.addEventListener("click", async () => {
+    const resp = await rpc("ttm/reload_config");
+    if (resp?.ok) ok(folStatus, "Background reloaded.");
+    else err(folStatus, "Reload failed.");
+  });
+}
+
+function setupPriorityEditor() {
+  const box = $("#priorityBox");
+  const save = $("#prioritySave");
   if (!box || !save) return;
-  chrome.storage.local.get("priority",(o)=>{
-    const arr = Array.isArray(o.priority) ? o.priority : [];
-    box.value = arr.join("\n");
-  });
-  save.addEventListener("click", ()=>{
-    const arr = box.value.split("\n").map(s=>s.trim().toLowerCase()).filter(Boolean);
-    chrome.storage.local.set({ priority: [...new Set(arr)] });
-  });
-})();
-// options.js (Debug tab)
-(function debugPanel(){
-  const out = document.getElementById("dbgOut");
-  const btnRun = document.getElementById("dbgRun");
-  const btnCopy = document.getElementById("dbgCopy");
-  const btnClear = document.getElementById("dbgClear");
-  const btnOpen = document.getElementById("dbgOpen");
-  const inpChan = document.getElementById("dbgChannel");
-  const rpc = (type, payload={}) => new Promise(r=>chrome.runtime.sendMessage({type, ...payload}, x=>r(x||{})));
 
-  function format(obj){ try{ return JSON.stringify(obj, null, 2); } catch{ return String(obj); } }
-  function append(text){ out.value = text; out.scrollTop = out.scrollHeight; }
+  save.addEventListener("click", async () => {
+    const bag = await readStorage();
+    const cfg = getStoredConfig(bag);
+    const follows = uniqNames(Array.isArray(bag.follows) ? bag.follows : cfg.follows);
+    const priority = uniqNames(box.value.split("\n"));
+    const nextCfg = clampConfig({ ...cfg, follows, priority, followUnion: uniqNames([...follows, ...priority]) });
+    await writeConfigEverywhere(nextCfg);
+    cfgTA.value = JSON.stringify(nextCfg, null, 2);
+    ok(cfgStatus, "Priority saved.");
+  });
+}
 
-  btnRun?.addEventListener("click", async ()=>{
+function setupTokenTools() {
+  const cid = $("#cid");
+  const csecret = $("#csecret");
+  const tok = $("#tok");
+  const ps1Out = $("#ps1Out");
+  const curlOut = $("#curlOut");
+
+  cid?.addEventListener("input", renderTokenSnippets);
+  csecret?.addEventListener("input", renderTokenSnippets);
+
+  $("#btnCopyPS1")?.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(ps1Out?.value || "");
+      ok(cfgStatus, "PowerShell copied.");
+    } catch {
+      err(cfgStatus, "Copy failed.");
+    }
+  });
+
+  $("#btnCopyCurl")?.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(curlOut?.value || "");
+      ok(cfgStatus, "cURL copied.");
+    } catch {
+      err(cfgStatus, "Copy failed.");
+    }
+  });
+
+  $("#btnApplyCIDToCfg")?.addEventListener("click", () => {
+    const value = (cid?.value || "").trim();
+    if (!value) {
+      err(cfgStatus, "Enter a Client ID first.");
+      return;
+    }
+    if (!updateConfigField("client_id", value)) {
+      err(cfgStatus, "Config JSON is not valid.");
+      return;
+    }
+    ok(cfgStatus, "Client ID inserted into config.");
+  });
+
+  $("#btnApplyToken")?.addEventListener("click", () => {
+    const value = (tok?.value || "").trim();
+    if (!value) {
+      err(cfgStatus, "Paste a token first.");
+      return;
+    }
+    if (!updateConfigField("access_token", value)) {
+      err(cfgStatus, "Config JSON is not valid.");
+      return;
+    }
+    ok(cfgStatus, "Token inserted into config.");
+  });
+}
+
+function setupDebugPanel() {
+  const out = $("#dbgOut");
+  const btnRun = $("#dbgRun");
+  const btnCopy = $("#dbgCopy");
+  const btnClear = $("#dbgClear");
+  const btnOpen = $("#dbgOpen");
+  const inputChannel = $("#dbgChannel");
+
+  const format = (obj) => {
+    try {
+      return JSON.stringify(obj, null, 2);
+    } catch {
+      return String(obj);
+    }
+  };
+
+  const setOut = (text) => {
+    if (!out) return;
+    out.value = text;
+    out.scrollTop = out.scrollHeight;
+  };
+
+  btnRun?.addEventListener("click", async () => {
     btnRun.disabled = true;
     const diag = await rpc("TTM_DIAG");
     const logs = await rpc("TTM_GET_LOGS");
-    append(`=== DIAGNOSTICS ===\n${format(diag)}\n\n=== LOGS ===\n${format(logs.logs||[])}`);
+    setOut(`=== DIAGNOSTICS ===\n${format(diag)}\n\n=== LOGS ===\n${format(logs?.logs || [])}`);
     btnRun.disabled = false;
   });
-  document.getElementById('btnFetchFollows')?.addEventListener('click', async ()=>{
-  const r = await rpc('TTM_HELIX_FETCH_FOLLOWS');
-  if (!r?.ok) { alert('Fetch failed: ' + (r?.error||'unknown')); return; }
-  const ta = document.getElementById('followsText'); // your textarea id
-  if (ta) ta.value = r.follows.join('\n');
+
+  btnCopy?.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(out?.value || "");
+      ok(cfgStatus, "Debug output copied.");
+    } catch {
+      err(cfgStatus, "Copy failed.");
+    }
   });
 
-  btnCopy?.addEventListener("click", async ()=>{
-    try{ await navigator.clipboard.writeText(out.value || ""); }catch{}
-  });
-
-  btnClear?.addEventListener("click", async ()=>{
+  btnClear?.addEventListener("click", async () => {
     await rpc("TTM_CLEAR_LOGS");
-    append("");
+    setOut("");
+    ok(cfgStatus, "Logs cleared.");
   });
 
-  btnOpen?.addEventListener("click", async ()=>{
-    const ch = (inpChan?.value||"").trim().toLowerCase();
-    if (!ch) return;
-    const res = await rpc("TTM_OPEN_CHANNEL", { channel: ch });
-    append((out.value||"") + `\n\nOpen test for "${ch}": ${res?.ok ? "ok" : "failed"}`);
+  btnOpen?.addEventListener("click", async () => {
+    const channel = normalizeName(inputChannel?.value);
+    if (!channel) return;
+    const resp = await rpc("TTM_OPEN_CHANNEL", { channel });
+    const line = `Open test for "${channel}": ${resp?.ok ? "ok" : "failed"}`;
+    setOut((out?.value ? out.value + "\n\n" : "") + line);
   });
-})();
+}
+
+async function init() {
+  setupTabs();
+  setupConfigButtons();
+  setupFollowButtons();
+  setupPriorityEditor();
+  setupTokenTools();
+  setupDebugPanel();
+  await showManifestVersion();
+  await loadUI();
+}
+
+init();
