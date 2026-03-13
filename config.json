@@ -12,5 +12,7 @@
   "followUnion": [],
   "follows": [],
   "priority": [],
-    "blacklist": []
+  "soft_wake_tabs": false,
+  "soft_wake_only_when_browser_focused": true,
+  "blacklist": []
 }

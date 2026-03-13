@@ -78,6 +78,13 @@ export async function saveSettings(patch) {
   return state.settings;
 }
 
+export function coerceSettings(s) {
+  const out = { ...s };
+  if (out.max_tabs != null) out.max_tabs = Math.max(0, Number(out.max_tabs));
+  if (out.check_interval_sec != null) out.check_interval_sec = Math.max(15, Number(out.check_interval_sec));
+  return out;
+}
+
 export function redactForDiag(s) {
   const redacted = { ...s };
   if (redacted.access_token) redacted.access_token = "***";

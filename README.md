@@ -1,6 +1,6 @@
 # Twitch Tab Manager
 
-Opens Twitch stream tabs for your followed channels, auto-unmutes/resumes playback, de-duplicates per channel, and enforces a max open tab limit. Windows-friendly and shareable with friends.
+Opens Twitch stream tabs for your followed channels, keeps them grouped together, tries to keep playback alive, de-duplicates per channel, and respects a strict max open tab limit. Built for local use, Windows-friendly, and easy to share with friends.
 
 ---
 
@@ -23,24 +23,38 @@ Opens Twitch stream tabs for your followed channels, auto-unmutes/resumes playba
 - [FAQ](#faq)
 - [Privacy Policy](#privacy-policy)
 - [Changelog](#changelog)
-- [Roadmap](#roadmap)
+- [Roadmap / To Do](#roadmap--to-do)
 
 ---
 
 ## Features
-- Auto-open/close Twitch channel tabs based on **live** status via **Helix API** or token-less **HTML** fallback (Following → Live).
-- **Unmute + resume** playback with gentle, randomized retries.
-- Per-channel **de-duplication** (single tab per channel).
-- Ignores non-player pages (`/drops`, `/moderator`, `/inventory`, `/directory`, etc.).
-- **Max tab cap** (`max_tabs`) with least-recently-used trimming of manager-opened tabs.
-- **Popup timer** shows “Next check in Xs”.
-- **Options** includes **Fetch My Follows** (pulls your full follow list automatically).
+- Auto-open and auto-close Twitch channel tabs based on **live status**
+- **Helix-first** live detection when `client_id` + `access_token` are configured
+- HTML fallback/live probing for setups that do not use Helix
+- Per-channel **de-duplication**
+- Keeps Twitch tabs together in the same browser window where possible
+- Respects a strict **max tab cap** (`max_tabs`)
+- Background **re-pokes** managed Twitch tabs to help resume playback/unmute when Twitch stalls hidden tabs
+- Popup controls for:
+  - **On / Off**
+  - **Force Poll**
+  - **Reload Config**
+  - **Open Settings**
+  - **Diagnose**
+- Options page includes:
+  - JSON config editor
+  - follows editor
+  - priority channels editor
+  - **Fetch My Follows**
+  - import / export helpers
+  - debug tools
 
 ---
 
 ## Requirements
-- **Chrome** or Chromium-based browser with **Developer Mode**.
-- Either a Twitch **Client ID** + **App Access Token** (**Helix**) or choose token-less mode (see [Get `client_id` & `access_token`](#get_client_id--access_token) for setup).
+- **Chrome** or another Chromium-based browser with **Developer Mode**
+- For best live detection, a Twitch **Client ID** + **App Access Token**
+- Token-less setups can still work through HTML/fallback methods, but Helix is preferred
 
 ---
 
@@ -48,15 +62,19 @@ Opens Twitch stream tabs for your followed channels, auto-unmutes/resumes playba
 ```text
 / (extension root)
 ├─ manifest.json
-├─ background.js              # polling, open/close, dedupe, max_tabs, Fetch My Follows
-├─ content_unmute.js          # unmute/resume helper injected on twitch.tv
-├─ loadConfig.js
+├─ background.js
+├─ bg.core.js
+├─ bg.compat.js
+├─ bg.live.js
+├─ bg.tabs.js
+├─ bg.stability.js
+├─ content_unmute.js
+├─ content_status.js
 ├─ popup.html
 ├─ popup.js
 ├─ options.html
 ├─ options.js
-├─ style.css
-├─ twitchAPI.js
+├─ config.json
 └─ icons/
    ├─ icon16.png
    ├─ icon32.png
@@ -67,54 +85,75 @@ Opens Twitch stream tabs for your followed channels, auto-unmutes/resumes playba
 
 ## Quick Start
 
-0. **Install from the Chrome Web Store** — [https://chromewebstore.google.com/detail/twitch-tab-manager/dagoljomgoainmmfldhnikegghjhbdaf](https://chromewebstore.google.com/detail/twitch-tab-manager/dagoljomgoainmmfldhnikegghjhbdaf)
-
-1. Open `chrome://extensions` → enable **Developer mode** → **Load unpacked** (for local/dev builds) → select this folder.
-
-2. Click the extension icon (popup) → toggle **On** → (optional) **Force Poll** to test instantly.
-
-3. Open **Options** → **Follows** → click **Fetch My Follows**
-
-   * **Open active tab (auto-scroll)**: opens `https://www.twitch.tv/directory/following/channels`, auto-scrolls to load all, saves usernames.
-   * **Use my current Twitch tab**: if you already opened that page and scrolled, it scrapes your open tab.
-
-4. (Optional) **Export/Import** your follows and **Export/Import** settings for backup/restore.
+1. Open `chrome://extensions`
+2. Enable **Developer mode**
+3. Click **Load unpacked**
+4. Select this extension folder
+5. Open the popup and turn it **On**
+6. Open **Settings**
+7. Check your config / follows / priority
+8. Use **Fetch My Follows** if needed
+9. Use **Force Poll** to test immediately
 
 ---
 
 ## Settings
 
-Settings are stored locally (no separate `config.json` required). Key options:
+Settings are stored locally. Typical example:
 
 ```json
 {
-  "live_source": "auto",        // "helix" | "following_html" | "auto"
+  "live_source": "auto",
   "client_id": "",
   "access_token": "",
   "check_interval_sec": 60,
-  "max_tabs": 8,
-  "force_unmute": true,         // persistent: periodically re-enforce audio unmuted
-  "unmute_streams": true,       // one-shot: try unmute once when a tab becomes active
-  "force_resume": true,         // resume playback if paused/stalled
-  "autoplay_streams": false     // if paused with Play button visible, click to start
+  "max_tabs": 4,
+  "enabled": true,
+  "force_unmute": false,
+  "unmute_streams": true,
+  "force_resume": false,
+  "autoplay_streams": true,
+  "follows": [],
+  "priority": [],
+  "followUnion": [],
+  "blacklist": [],
+  "soft_wake_tabs": false,
+  "soft_wake_only_when_browser_focused": true
 }
 ```
 
-**Notes**
+### Notes
 
-* `live_source: "auto"` tries Helix first (needs `client_id` + token), then falls back to HTML.
-* You can **Export/Import** these settings as JSON from Options.
+* `live_source: "auto"` prefers Helix first, then falls back when needed
+* `priority` is separate from `follows`
+* `followUnion` is the combined set used internally
+* `max_tabs` is always enforced
+* `soft_wake_tabs` is intended for harder cases where Twitch background tabs stay paused/muted
+* `soft_wake_only_when_browser_focused` is meant to avoid interrupting gaming or other apps
 
 ---
 
 ## Fetch My Follows
 
-In **Options → Follows**:
+The Options page supports two fetch modes:
 
-* **Open active tab (auto-scroll)** — launches the official Following → Channels page, finds the real scroll container, synthesizes wheel events, auto-scrolls to load **all** follows, and saves them locally.
-* **Use my current Twitch tab** — scrapes the page you already opened and scrolled.
+* **Open active tab (auto-scroll)**
+  Opens the official `Following → Channels` page, scrolls it, and saves the usernames found there.
 
-You can still Export/Import your follows list as text if you prefer.
+* **Use my current Twitch tab**
+  Reuses an already-open Twitch tab and moves it to the correct page if needed before scraping.
+
+### Current behavior
+
+* Newly fetched follows are synced into your stored `follows`
+* Channels you no longer follow can be removed during sync
+* `priority` is left alone
+* `followUnion` is rebuilt from `follows + priority`
+
+### Planned improvement
+
+* clearer follow sync changelog in the UI
+* better visibility for “added” and “removed” usernames after a fetch
 
 ---
 
@@ -122,9 +161,11 @@ You can still Export/Import your follows list as text if you prefer.
 
 ### Create a Twitch app
 
-* Go to **Developer Console** → [https://dev.twitch.tv/console/apps](https://dev.twitch.tv/console/apps) → **Register Your Application**
-* OAuth Redirect: `http://localhost` (placeholder OK)
-* Copy **Client ID** (keep **Client Secret** private).
+* Go to the Twitch Developer Console
+* Register an application
+* A placeholder redirect like `http://localhost` is fine for this use
+* Copy your **Client ID**
+* Keep your **Client Secret** private
 
 ### Generate an App Access Token
 
@@ -151,13 +192,21 @@ curl -X POST "https://id.twitch.tv/oauth2/token" \
   -d "grant_type=client_credentials"
 ```
 
-> Tokens expire. If live checks return **401**, generate a new token.
+> If Helix starts returning 401 errors, generate a new token.
 
 ---
 
 ## How It Works
 
-The background poller wakes on a schedule → loads settings + follows → determines who is **live** → opens streams (up to `max_tabs`), injects `content_unmute.js` to resume/unmute → de-dupes channels → trims extra manager-opened tabs by LRU → closes offline channels after a short grace period.
+The background worker loads settings, checks who is live, compares that list against already-open Twitch tabs, and opens or closes manager-controlled tabs as needed.
+
+For Twitch player reliability, managed tabs get:
+
+* content scripts injected on channel pages
+* delayed re-pokes after opening
+* periodic re-pokes while they stay managed
+
+The extension only closes tabs it believes it opened itself.
 
 ---
 
@@ -165,46 +214,107 @@ The background poller wakes on a schedule → loads settings + follows → deter
 
 ### Popup
 
-* **On/Off** — master toggle (persisted locally)
-* **Force Poll** — immediate check (override)
-* **Reload Config** — reloads settings in the background
-* **Open Settings** — quick link to Options
-* Shows **Next check in Xs** countdown
+* **On / Off** — master toggle
+* **Force Poll** — run a live check immediately
+* **Reload Config** — reload settings in the background worker
+* **Open Settings** — jump to Options
+* **Diagnose** — quick status/debug info
 
 ### Options
 
-* **Settings (JSON)** — Edit / **Save** / **Apply & Reload** / **Export** / **Import**
-* **Follows** — Edit / **Save** / **Export** / **Import** / **Fetch My Follows**
+* **Settings JSON**
+
+  * Save
+  * Apply & Reload
+  * Export
+  * Import
+  * Reset to Packaged
+  * Refresh From Storage
+* **Follows**
+
+  * Save
+  * Export
+  * Import
+  * Reset to Packaged
+  * Refresh From Storage
+  * Fetch My Follows
+* **Priority Channels**
+
+  * manual list of preferred channels
+* **Debug**
+
+  * diagnostics
+  * logs
+  * helper actions
 
 ---
 
 ## Troubleshooting
 
-* **No tabs open** — Helix: token expired (401) → re-issue; HTML: ensure follows exist or use **Fetch My Follows**.
-* **Force Poll seems ignored** — Toggle **On** in popup; in Options, click **Apply & Reload**.
-* **Didn’t fetch all follows** — Open **Following → Channels** yourself, scroll to bottom, then use **Use my current Twitch tab** mode.
+### No tabs open
+
+* Check that the extension is turned **On**
+* Check that `follows` or `priority` is not empty
+* If using Helix, verify `client_id` and `access_token`
+* Try **Force Poll**
+
+### Force Poll finds lives but opens nothing
+
+* Check Diagnostics
+* Check `max_tabs`
+* Make sure those channels are not already open in duplicate/problem tabs
+* Reload the extension and try again
+
+### Tabs open but stay paused or muted
+
+* Twitch background behavior can be inconsistent
+* Re-pokes should help, but some cases may still require a visible/focused tab
+* `soft_wake_tabs` exists for future / advanced handling, but should stay conservative
+
+### Fetch My Follows misses channels
+
+* Use the official `Following → Channels` page
+* Let it scroll fully
+* Try the auto-scroll mode first
+* Helix/live detection is separate from fetching your follow list
+
+### Tabs close and reopen unexpectedly
+
+* This should be much better in 1.0.7
+* If it still happens, use Diagnostics and logs to check whether Twitch returned a temporary empty live set
 
 ---
 
 ## Feedback & Support
 
-* Bugs & feature requests: [https://github.com/drachescript/Twitch-Tab-Manager/issues/new/choose](https://github.com/drachescript/Twitch-Tab-Manager/issues/new/choose)
-* Source code & releases: [https://github.com/drachescript/Twitch-Tab-Manager](https://github.com/drachescript/Twitch-Tab-Manager)
+* Bugs and feature requests: GitHub issues
+* Source code / releases: GitHub repo
 
 ---
 
 ## FAQ
 
-* **Can it run without tokens?** — Yes: set `live_source = "following_html"` or `"auto"`.
-* **Does it spam Twitch?** — No: batched requests and coarse intervals by default.
-* **Can I favorite or prioritize?** — In progress (see [Roadmap](#roadmap)).
+### Can it run without tokens?
+
+Yes, but Helix is more reliable.
+
+### Does it close my own manually opened Twitch tabs?
+
+It is designed not to. Only manager-opened tabs should be auto-closed.
+
+### Can I keep certain channels preferred?
+
+Yes. Use `priority`.
+
+### Can it always force hidden tabs to play with sound?
+
+Not perfectly. Browser autoplay/background restrictions still apply, so some cases need retries or a future soft-wake fallback.
 
 ---
 
 ## Privacy Policy
 
-We don’t collect, sell, or share personal data. All configuration stays on your device.
-Full policy: [https://docs.google.com/document/d/1SkvBWapQawvzuhaYT-iHOoUSV0go4PgFhtxi6Z6nwjA/edit?usp=sharing](https://docs.google.com/document/d/1SkvBWapQawvzuhaYT-iHOoUSV0go4PgFhtxi6Z6nwjA/edit?usp=sharing)
+No personal data is collected, sold, or shared. Configuration stays on your device.
 
 ---
 
@@ -212,59 +322,94 @@ Full policy: [https://docs.google.com/document/d/1SkvBWapQawvzuhaYT-iHOoUSV0go4P
 
 All notable changes use `DD/MM/YYYY`.
 
-### [1.0.7] — Unreleased
+### [1.0.7] — 13/03/2026
 
-
-* **Note**: If you want to **try WIP features for 1.0.6**, ask for the files.
-
+* Reworked the background service flow around the modular MV3 setup
+* Improved message compatibility for popup / options / diagnostics routing
+* Fixed several service worker startup and compatibility problems
+* Fixed broken toggle / config reload / force poll paths
+* Improved follow fetching from the official `Following → Channels` page
+* Fetch now behaves more like a sync and keeps `priority` separate
+* Improved Twitch tab grouping so new managed tabs prefer an existing Twitch window
+* Improved duplicate-channel handling
+* Added repeated background repokes for managed Twitch tabs after opening
+* Added player status reporting groundwork for smarter stuck-tab handling
+* Added safer protection against temporary empty live results closing everything at once
+* Improved diagnostics and general debugging flow
+* General cleanup and hardening across the background + tab management flow
 
 ### [1.0.6] — 06/11/2025
 
-* **Priority**: Added priority so it will first open ur priority streamers before ur follows also added Options textarea + popup **Add/Remove** when ur on a streamer page.
-* **Smaller fixes**: better offline detection, stricter max tabs, sturdier polling, more “human” Twitch interactions, plus Diagnostics for quick debugging.
-
+* Added priority handling so priority streamers are opened before regular follows
+* Added Options textarea + popup add/remove tools while on a streamer page
+* Better offline detection
+* Stricter `max_tabs` handling
+* Sturdier polling
+* More human-like Twitch interaction timing
+* Added Diagnostics for faster debugging
 
 ### [1.0.5] — 30/10/2025
 
-* **Fetch My Follows**: ignores sidebar; scrapes the **Following → Channels** grid; reliably auto-scrolls the real container.
-* **Auto-close**: more consistent cleanup of tabs for channels that went offline (with a short grace period).
-* **Moderator View aware**: won’t open a duplicate `/login` tab if `/moderator/login` is already open.
-* **Config auto-migration**: when new options are introduced, missing keys are added without overwriting existing values.
-* **Token helpers** in Options → Help: PowerShell / curl snippet generators.
+* Fetch My Follows ignores sidebar and targets the Following → Channels grid
+* More consistent cleanup of tabs for channels that went offline
+* Moderator-view aware duplicate handling
+* Config auto-migration for new options
+* Token helpers in Options → Help
 
 ### [1.0.4] — 18/09/2025
 
-* Initial public release with live detection (Helix or HTML), per-channel de-duplication, `max_tabs` cap, popup controls, and dark styling.
+* Initial public release with live detection, de-duplication, `max_tabs`, popup controls, and dark styling
 
 ### [1.0.3] — 12/09/2025
 
-* HTML scraping prototype; basic unmute/resume content script.
+* HTML scraping prototype
+* Basic unmute / resume content script
 
 ### [1.0.2] — 10/09/2025
 
-* Stability fixes around opening multiple tabs at once.
+* Stability fixes around opening multiple tabs at once
 
 ### [1.0.1] — 08/09/2025
 
-* First working background poller; minimal config.
+* First working background poller
+* Minimal config
 
 ### [1.0.0] — 05/09/2025
 
-* Project scaffolding; initial commit.
+* Project scaffolding
+* Initial commit
 
 ---
 
-## Roadmap
+## Roadmap / To Do
 
-* **Autoplay toggle**: when the player is paused (`player-play-pause-button` shows “Play”), auto-start playback.
-* **Ad-aware audio**: mute during ads, restore after, with safe backoff (no spam).
-* **Debug tab**: recent errors, open/close reasons, and actions log.
-* **Optional `!lurk`** chat message for a whitelist of streamers.
-* **Auto-claim**: Moments + Channel Points (no Drops).
-* Raid/host handling: hold raid tabs briefly, then respect priority/limits.
-* Debug tab (Options): recent errors/actions with **Copy to clipboard**.
-* **Priority preemption**: when full, replace the lowest-priority/non-priority tab if a priority channel goes live.
+### High priority
 
-```
+* Finish safer soft-wake fallback for stuck Twitch tabs
+* Add UI toggles for:
 
+  * `soft_wake_tabs`
+  * `soft_wake_only_when_browser_focused`
+* Improve player-state handling so hidden tabs are resumed/unmuted more reliably
+* Add clearer follow-sync history in Options:
 
+  * added usernames
+  * removed usernames
+  * last sync time
+
+### Medium priority
+
+* Better handling for raids
+* Better handling for tab reuse vs manager-owned tabs
+* Improved duplicate detection across Twitch windows
+* Stronger stuck-tab detection before any wake/focus action
+* More reliable “Use my current Twitch tab” fetch behavior
+
+### Lower priority / future ideas
+
+* Optional quality control
+* Volume memory
+* Better debug view in Options
+* Channel points helper / notifier
+* Better ad-aware behavior
+* Better recovery when Twitch changes page structure

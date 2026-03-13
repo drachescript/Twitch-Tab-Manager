@@ -1,475 +1,730 @@
-// background.js
+import { state, saveSettings, armAlarm, log, diagnose } from "./bg.core.js";
+import { ensureAlarm, setEnabled, normalizeType } from "./bg.compat.js";
+import { reconcileTabs, listManaged } from "./bg.tabs.js";
+import "./bg.live.js";
+import "./bg.stability.js";
 
-import {
-  DEFAULTS, state, saveSettings, getSettings,
-  setOpenChannels, setLastLive, log, diagnose, armAlarm, redactForDiag
-} from './bg.core.js';
-import './bg.live.js';
-import './bg.tabs.js';
-import './bg.compat.js';
-
-// Utilities
-const rtURL = (p) => chrome.runtime.getURL(p);
-
-async function readTextFromPackage(path) {
-  try {
-    const res = await fetch(rtURL(path));
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.text();
-  } catch (e) {
-    console.warn('[TTM] readTextFromPackage failed:', path, e.message);
-    return '';
-  }
-}
-
-const uniqLower = (arr) =>
-  Array.from(new Set((arr || []).map(s => String(s).trim().toLowerCase()).filter(Boolean)));
-
-// Default settings
-function getDefaultConfig() {
-  return {
-    enabled: true,
-    check_interval_sec: 60,
-    max_tabs: 4,
-    client_id: '',
-    access_token: '',
-    follows: [],
-    priority: [],
-    live_source: 'auto',
-    force_unmute: false,
-    unmute_streams: true,
-    autoplay_streams: false,
-    force_resume: true,
-    followUnion: [],
-    followUnion_count: 0,
-    follows_count: 0,
-    priority_count: 0
-  };
-}
-
-// Boot and alarm
-let booted = false;
-// guard to avoid registering the alarm listener more than once
-if (typeof globalThis.__ttm_alarm_listener_installed === 'undefined') globalThis.__ttm_alarm_listener_installed = false;
-// === [TTM PATCH A — message normalize + accepted map] ===
-(function initTtmMessageMap(){
-  if (globalThis.TTM_NAME_MAP) return; // don't re-add if already present
-  const map = new Map([
-    // canonical
-    ['TTM_STATUS','ping'], ['TTM_TOGGLE','toggle'], ['TTM_RELOAD_CONFIG','reload'],
-    ['TTM_FORCE_POLL','force'], ['TTM_DIAG','diag'],
-    // legacy/fallbacks the popup might still use
-    ['PING','ping'], ['TOGGLE','toggle'], ['RELOAD_CONFIG','reload'],
-    ['FORCE_POLL','force'], ['DIAGNOSE','diag'],
-    // lowercase variants (some older popups sent these)
-    ['ttm/ping','ping'], ['ttm/enable','toggle'], ['ttm/reload_config','reload'],
-    ['ttm/force_poll','force'], ['ttm/diagnose','diag']
-  ]);
-  globalThis.TTM_NAME_MAP = map;
-  globalThis.TTM_NORMALIZE = (t) => {
-    if (!t) return '';
-    const k = String(t).trim();
-    const hit = map.get(k) || map.get(k.toUpperCase());
-    return hit || '';
-  };
+(() => {
+  const root = globalThis;
+  if (root.__TTM_BG_INITED__) return;
+  root.__TTM_BG_INITED__ = true;
+  root.TTM = root.TTM || {};
 })();
 
-async function ensureAlarm() {
-  // armAlarm reads state.settings.check_interval_sec
-  await armAlarm();
-  // Install the alarm listener only once (prevent duplicate listeners)
-  if (!globalThis.__ttm_alarm_listener_installed) {
-    chrome.alarms.onAlarm.addListener(a => {
-      if (a.name === 'ttm-tick' && state.settings.enabled) {
-        poll().catch(e => log('poll_error', String(e)));
+const ACCEPTED_TYPES = [
+  "ttm/ping",
+  "ttm/enable",
+  "ttm/reload_config",
+  "ttm/force_poll",
+  "ttm/diagnose",
+  "TTM_STATUS",
+  "TTM_TOGGLE",
+  "TTM_RELOAD_CONFIG",
+  "TTM_FORCE_POLL",
+  "TTM_DIAG",
+  "PING",
+  "TOGGLE",
+  "RELOAD_CONFIG",
+  "FORCE_POLL",
+  "DIAGNOSE",
+  "TTM_FETCH_FOLLOWS",
+  "TTM_GET_LOGS",
+  "TTM_PLAYER_STATUS",
+  "TTM_CLEAR_LOGS"
+];
+
+function parseBool(value, fallback) {
+  if (value === true || value === false) return value;
+  if (typeof value === "string") {
+    const v = value.trim().toLowerCase();
+    if (v === "true") return true;
+    if (v === "false") return false;
+  }
+  if (value === undefined || value === null) return fallback;
+  return !!value;
+}
+
+function normalizeName(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function uniqNames(list) {
+  return [...new Set((list || []).map(normalizeName).filter(Boolean))];
+}
+
+function clampSettings(raw) {
+  const cfg = { ...(raw || {}) };
+
+  cfg.enabled = parseBool(cfg.enabled, true);
+  cfg.check_interval_sec = Math.max(10, Number(cfg.check_interval_sec || 60) || 60);
+  cfg.max_tabs = Math.max(1, Number(cfg.max_tabs || 4) || 4);
+
+  cfg.force_unmute = parseBool(cfg.force_unmute, false);
+  cfg.unmute_streams = parseBool(cfg.unmute_streams, false);
+  cfg.force_resume = parseBool(cfg.force_resume, false);
+  cfg.autoplay_streams = parseBool(cfg.autoplay_streams, false);
+  cfg.soft_wake_tabs = parseBool(cfg.soft_wake_tabs, false);
+  cfg.soft_wake_only_when_browser_focused = parseBool(cfg.soft_wake_only_when_browser_focused, true);
+
+  cfg.follows = uniqNames(cfg.follows);
+  cfg.priority = uniqNames(cfg.priority);
+  cfg.followUnion = uniqNames([...(cfg.follows || []), ...(cfg.priority || [])]);
+  cfg.blacklist = uniqNames(cfg.blacklist);
+
+  return cfg;
+}
+
+function redactForDiag(settings = {}) {
+  const {
+    client_id,
+    access_token,
+    follows = [],
+    priority = [],
+    followUnion = [],
+    ...rest
+  } = settings;
+
+  return {
+    ...rest,
+    follows_count: follows.length,
+    priority_count: priority.length,
+    followUnion_count: followUnion.length
+  };
+}
+
+async function loadSettings() {
+  const bag = await chrome.storage.local.get(null);
+
+  const base =
+    bag.settings ??
+    bag.config ??
+    bag.ttm_settings_v1 ??
+    bag ??
+    {};
+
+  const merged = clampSettings(base);
+  state.settings = { ...state.settings, ...merged };
+
+  await saveSettings(state.settings);
+  await chrome.storage.local.set({
+    settings: state.settings,
+    config: state.settings,
+    enabled: state.settings.enabled,
+    follows: state.settings.follows,
+    priority: state.settings.priority,
+    followUnion: state.settings.followUnion,
+    max_tabs: state.settings.max_tabs,
+    check_interval_sec: state.settings.check_interval_sec,
+    follows_count: state.settings.follows.length,
+    priority_count: state.settings.priority.length,
+    followUnion_count: state.settings.followUnion.length
+  });
+
+  log("config_loaded", redactForDiag(state.settings));
+  return state.settings;
+}
+
+async function fetchFollowLoginsFromPage(tabId) {
+  const [{ result } = {}] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: async () => {
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+      const normalizeName = (value) => String(value || "").trim().toLowerCase();
+
+      const getFollowedCards = () => {
+        const out = new Set();
+
+        // Main "Followed channels" cards on /directory/following/channels
+        const cardLinks = Array.from(
+          document.querySelectorAll(
+            'main a[href^="/"], section a[href^="/"], [data-a-target="user-card-modal"] a[href^="/"]'
+          )
+        );
+
+        for (const link of cardLinks) {
+          const href = link.getAttribute("href") || "";
+          if (!href.startsWith("/")) continue;
+
+          const parts = href.split("?")[0].split("#")[0].split("/").filter(Boolean);
+          const first = normalizeName(parts[0]);
+          if (!first) continue;
+          if (!/^[a-z0-9_]+$/.test(first)) continue;
+
+          const card =
+            link.closest('[data-a-target="user-card-modal"]') ||
+            link.closest(".user-card") ||
+            link.closest('[class*="channel-follow-listing"]');
+
+          if (!card) continue;
+
+          const unfollowBtn = card.querySelector('[data-a-target="unfollow-button"]');
+          if (!unfollowBtn) continue;
+
+          out.add(first);
+        }
+
+        return [...out];
+      };
+
+      const clickShowMore = () => {
+        const buttons = Array.from(document.querySelectorAll('button, a'));
+        let clicked = false;
+
+        for (const el of buttons) {
+          const text = (el.textContent || "").trim().toLowerCase();
+          const target = el.getAttribute("data-a-target") || "";
+          const inSidebar = !!el.closest('[data-test-selector="side-nav"]');
+
+          if (inSidebar) continue;
+
+          if (
+            target === "side-nav-show-more-button" ||
+            target === "side-nav-show-more" ||
+            text !== "show more"
+          ) {
+            continue;
+          }
+
+          el.click();
+          clicked = true;
+        }
+
+        return clicked;
+      };
+
+      const scroller =
+        document.querySelector('[data-a-target="root-scroller"]') ||
+        document.scrollingElement ||
+        document.documentElement;
+
+      let best = [];
+      let stablePasses = 0;
+
+      for (let i = 0; i < 20; i += 1) {
+        const beforeCount = getFollowedCards().length;
+
+        const clicked = clickShowMore();
+
+        scroller.scrollTo({
+          top: scroller.scrollHeight,
+          behavior: "instant"
+        });
+
+        await sleep(clicked ? 1800 : 1400);
+
+        const after = getFollowedCards();
+        if (after.length > best.length) best = after;
+
+        if (after.length <= beforeCount) stablePasses += 1;
+        else stablePasses = 0;
+
+        if (stablePasses >= 3 && !clicked) break;
       }
+
+      scroller.scrollTo({ top: 0, behavior: "instant" });
+      await sleep(250);
+
+      return best;
+    }
+  });
+
+  return uniqNames(result || []);
+}
+
+async function fetchMyFollows(mode = "active") {
+  let tabId = null;
+  let createdTab = false;
+
+  try {
+    if (mode === "current") {
+      const tabs = await chrome.tabs.query({});
+      const twitchTab = tabs.find((tab) => {
+        const url = tab.url || tab.pendingUrl || "";
+        return /https:\/\/www\.twitch\.tv\//i.test(url);
+      });
+
+      if (!twitchTab?.id) {
+        return { ok: false, error: "No Twitch tab found." };
+      }
+
+      tabId = twitchTab.id;
+    } else {
+      const tab = await chrome.tabs.create({
+        url: "https://www.twitch.tv/directory/following/channels",
+        active: false
+      });
+
+      tabId = tab.id;
+      createdTab = true;
+    }
+
+    const targetUrl = "https://www.twitch.tv/directory/following/channels";
+
+    const current = await chrome.tabs.get(tabId);
+    const currentUrl = current?.url || current?.pendingUrl || "";
+
+    if (!/\/directory\/following\/channels/i.test(currentUrl)) {
+      await chrome.tabs.update(tabId, { url: targetUrl });
+    }
+
+    await new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        resolve();
+      }, 30000);
+
+      function onUpdated(id, info, tab) {
+        if (id !== tabId) return;
+        const url = tab?.url || tab?.pendingUrl || "";
+        if (info.status !== "complete") return;
+        if (!/\/directory\/following\/channels/i.test(url)) return;
+
+        clearTimeout(timeout);
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        resolve();
+      }
+
+      chrome.tabs.onUpdated.addListener(onUpdated);
     });
-    globalThis.__ttm_alarm_listener_installed = true;
+
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+
+    const usernames = await fetchFollowLoginsFromPage(tabId);
+
+    if (!usernames.length) {
+      return { ok: false, error: "No follows were found on the page." };
+    }
+
+    return { ok: true, usernames };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  } finally {
+    if (createdTab && tabId != null) {
+      try {
+        await chrome.tabs.remove(tabId);
+      } catch {}
+    }
   }
 }
+
+async function poll({ force = false } = {}) {
+  await loadSettings();
+
+  if (!force && state.settings.enabled === false) {
+    log("poll_skip", { reason: "disabled" });
+    return { ok: true, skipped: "disabled" };
+  }
+
+  let liveList = [];
+
+  try {
+    const getter = globalThis.bgLive?.getLiveNowByConfigSafe;
+    const live = typeof getter === "function" ? await getter(state.settings) : [];
+    liveList = uniqNames(Array.isArray(live) ? live : [...(live || [])]);
+  } catch (e) {
+    log("poll_live_error", String(e));
+  }
+
+    if (liveList.length === 0 && state.openChannels.length > 0 && state.settings.followUnion.length > 0) {
+    log("poll_keep_open", {
+      reason: "transient_empty_live_set",
+      open_count: state.openChannels.length,
+      configured_count: state.settings.followUnion.length
+    });
+  } else {
+    try {
+      await reconcileTabs(liveList, state.settings);
+    } catch (e) {
+      log("poll_reconcile_error", String(e));
+    }
+  }
+
+  try {
+    const managed = await listManaged();
+    state.lastLive = liveList;
+    state.openChannels = managed;
+
+    log("poll_done", {
+      live_count: liveList.length,
+      open_count: managed.length,
+      max_tabs: state.settings.max_tabs,
+      force: !!force
+    });
+
+    return {
+      ok: true,
+      live_count: liveList.length,
+      open_count: managed.length
+    };
+  } catch (e) {
+    log("poll_list_error", String(e));
+    return { ok: false, error: String(e) };
+  }
+}
+
+globalThis.TTM.poll = poll;
+globalThis.TTM.armAlarm = armAlarm;
+globalThis.TTM.getSettings = () => state.settings;
+
+const TWITCH_CHANNEL_RX = /^https:\/\/www\.twitch\.tv\/(?!directory|p|videos|friends|inventory|drops|settings|messages|login|downloads|moderator)([^/?#]+)/i;
+const TTM_REPOKE_ALARM = "ttm-repoke";
+const REPOKE_DELAYS_MS = [1500, 4500, 9000];
+
+const playerStatusByTab = new Map();
+const softWakeByTab = new Map();
+const SOFT_WAKE_MIN_STUCK_MS = 12000;
+const SOFT_WAKE_COOLDOWN_MS = 60000;
+const SOFT_WAKE_TAB_MS = 900;
+
+function rememberPlayerStatus(tabId, status) {
+  const prev = playerStatusByTab.get(tabId) || {};
+  playerStatusByTab.set(tabId, {
+    ...prev,
+    ...status,
+    seenAt: Date.now()
+  });
+}
+
+function getPlayerStatus(tabId) {
+  return playerStatusByTab.get(tabId) || null;
+}
+
+function shouldSoftWake(tabId) {
+  if (!state.settings.soft_wake_tabs) return false;
+
+  const status = getPlayerStatus(tabId);
+  if (!status) return false;
+  if (!status.hasVideo) return false;
+  if (status.adPlaying) return false;
+  if (!status.paused && !status.muted) return false;
+
+  const now = Date.now();
+  const firstSeenBadAt = status.firstSeenBadAt || now;
+  const lastWakeAt = softWakeByTab.get(tabId) || 0;
+
+  if (now - firstSeenBadAt < SOFT_WAKE_MIN_STUCK_MS) return false;
+  if (now - lastWakeAt < SOFT_WAKE_COOLDOWN_MS) return false;
+
+  return true;
+}
+
+async function canSoftWakeWithoutStealingFromOtherApps() {
+  if (!state.settings.soft_wake_tabs) return false;
+  if (!state.settings.soft_wake_only_when_browser_focused) return true;
+
+  try {
+    const currentWindow = await chrome.windows.getCurrent();
+    return !!currentWindow?.focused;
+  } catch {
+    return false;
+  }
+}
+
+async function softWakeTab(tabId) {
+  if (!(await canSoftWakeWithoutStealingFromOtherApps())) return false;
+
+  let currentActiveTabId = null;
+  let currentWindowId = null;
+  let targetWindowId = null;
+
+  try {
+    const activeTabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    currentActiveTabId = activeTabs?.[0]?.id ?? null;
+    currentWindowId = activeTabs?.[0]?.windowId ?? null;
+
+    const targetTab = await chrome.tabs.get(tabId);
+    targetWindowId = targetTab?.windowId ?? null;
+    if (!targetWindowId) return false;
+
+    await chrome.windows.update(targetWindowId, { focused: true });
+    await chrome.tabs.update(tabId, { active: true });
+    await pokeChannelTab(tabId);
+
+    await new Promise((resolve) => setTimeout(resolve, SOFT_WAKE_TAB_MS));
+
+    if (currentActiveTabId != null) {
+      if (currentWindowId != null) {
+        try {
+          await chrome.windows.update(currentWindowId, { focused: true });
+        } catch {}
+      }
+
+      try {
+        await chrome.tabs.update(currentActiveTabId, { active: true });
+      } catch {}
+    }
+
+    softWakeByTab.set(tabId, Date.now());
+    log("soft_wake_ok", { tabId });
+    return true;
+  } catch (e) {
+    log("soft_wake_error", { tabId, error: String(e) });
+    return false;
+  }
+}
+
+async function reviewManagedTabsForSoftWake() {
+  const managedChannels = new Set(await listManaged());
+  if (!managedChannels.size) return;
+
+  try {
+    const tabs = await chrome.tabs.query({
+      url: ["*://www.twitch.tv/*", "*://twitch.tv/*"]
+    });
+
+    for (const tab of tabs) {
+      const ch = channelFromUrl(tab.url || tab.pendingUrl || "");
+      if (!ch || !managedChannels.has(ch)) continue;
+
+      const status = getPlayerStatus(tab.id);
+      if (!status) continue;
+
+      if (status.hasVideo && !status.adPlaying && (status.paused || status.muted)) {
+        if (!status.firstSeenBadAt) {
+          rememberPlayerStatus(tab.id, { firstSeenBadAt: Date.now() });
+        }
+      } else {
+        rememberPlayerStatus(tab.id, { firstSeenBadAt: 0 });
+      }
+
+      if (shouldSoftWake(tab.id)) {
+        await softWakeTab(tab.id);
+      }
+    }
+  } catch (e) {
+    log("soft_wake_review_error", String(e));
+  }
+}
+
+function isChannelUrl(url) {
+  try {
+    return TWITCH_CHANNEL_RX.test(String(url || ""));
+  } catch {
+    return false;
+  }
+}
+
+function channelFromUrl(url) {
+  try {
+    const match = String(url || "").match(TWITCH_CHANNEL_RX);
+    return match ? String(match[1] || "").trim().toLowerCase() : "";
+  } catch {
+    return "";
+  }
+}
+
+async function pokeChannelTab(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["content_unmute.js", "content_status.js"]
+    });
+  } catch {}
+
+  try {
+    await chrome.tabs.sendMessage(tabId, {
+      type: "TTM_ENFORCE",
+      settings: {
+        force_unmute: !!state.settings.force_unmute,
+        unmute_streams: !!state.settings.unmute_streams,
+        force_resume: !!state.settings.force_resume,
+        autoplay_streams: !!state.settings.autoplay_streams
+      }
+    });
+  } catch {}
+}
+
+function scheduleTabRepokes(tabId) {
+  for (const delay of REPOKE_DELAYS_MS) {
+    setTimeout(() => {
+      pokeChannelTab(tabId).catch(() => {});
+    }, delay);
+  }
+}
+
+async function repokeManagedTabs() {
+  const managedChannels = new Set(await listManaged());
+  if (!managedChannels.size) return;
+
+  try {
+    const tabs = await chrome.tabs.query({
+      url: ["*://www.twitch.tv/*", "*://twitch.tv/*"]
+    });
+
+    for (const tab of tabs) {
+      const ch = channelFromUrl(tab.url || tab.pendingUrl || "");
+      if (!ch || !managedChannels.has(ch)) continue;
+      await pokeChannelTab(tab.id);
+    }
+
+    await reviewManagedTabsForSoftWake();
+  } catch (e) {
+    log("repoke_error", String(e));
+  }
+}
+
+globalThis.TTM.scheduleTabRepokes = scheduleTabRepokes;
+
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+  if (info.status !== "complete") return;
+  if (!isChannelUrl(tab?.url)) return;
+
+  pokeChannelTab(tabId).catch(() => {});
+  scheduleTabRepokes(tabId);
+});
+
+chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (!isChannelUrl(tab?.url)) return;
+    await pokeChannelTab(tabId);
+  } catch {}
+});
+
+let booted = false;
 
 async function bootOnce() {
   if (booted) return;
-  await reloadConfig();  // storage-over-file merge
+  await loadSettings();
   await ensureAlarm();
-  booted = true;
-  log('boot', { enabled: state.settings.enabled, everySec: state.settings.check_interval_sec });
-}
-// Config merge (storage only)
-async function reloadConfig() {
-  // Read full storage to support both nested `settings` and legacy/top-level keys
-  const all = await new Promise(r => chrome.storage.local.get(null, r));
-  const defaults = getDefaultConfig();
-
-  // Log top-level keys present (redacted) to aid debugging
-  try { log('storage_keys', { keys: Object.keys(all || {}) }); } catch (e) { /* noop */ }
-
-  // Stored may be under `settings` (new) or `config` / top-level keys (old). Prefer nested `settings`.
-  let storedNested = all?.settings ?? all?.config ?? null;
-  if (typeof storedNested === 'string') {
-    try { storedNested = JSON.parse(storedNested); } catch (e) { /* leave as-is */ }
-  }
-
-  // Build a flattened stored object pulling from nested object first, then top-level keys
-  const storedFlat = {
-    client_id: storedNested?.client_id ?? all.client_id,
-    access_token: storedNested?.access_token ?? all.access_token,
-    max_tabs: storedNested?.max_tabs ?? all.max_tabs,
-    enabled: (storedNested && storedNested.enabled !== undefined) ? storedNested.enabled : (all.enabled !== undefined ? all.enabled : undefined),
-    check_interval_sec: storedNested?.check_interval_sec ?? all.check_interval_sec,
-    follows: Array.isArray(storedNested?.follows) ? storedNested.follows : (Array.isArray(all.follows) ? all.follows : []),
-    priority: Array.isArray(storedNested?.priority) ? storedNested.priority : (Array.isArray(all.priority) ? all.priority : []),
-    live_source: storedNested?.live_source ?? all.live_source,
-    force_unmute: storedNested?.force_unmute ?? all.force_unmute,
-    unmute_streams: storedNested?.unmute_streams ?? all.unmute_streams,
-    autoplay_streams: storedNested?.autoplay_streams ?? all.autoplay_streams,
-    force_resume: storedNested?.force_resume ?? all.force_resume,
-    // If follows were stored as a newline string, accept that too (we'll normalize below)
-    _follows_string: (!Array.isArray(storedNested?.follows) && typeof storedNested?.follows === 'string') ? storedNested.follows : (!Array.isArray(all.follows) && typeof all.follows === 'string' ? all.follows : null)
-  };
-
-  // Merge defaults with stored values
-  const merged = { ...defaults, ...(storedFlat || {}) };
-
-  // Normalize arrays and derive union/counts
-  // If follows were stored as a single newline string, parse it now into an array
-  if ((!Array.isArray(merged.follows) || merged.follows.length === 0) && storedFlat?._follows_string) {
-    merged.follows = String(storedFlat._follows_string).split(/\r?\n/).map(s => String(s||'').toLowerCase().trim()).filter(Boolean);
-  }
-  merged.follows = Array.isArray(merged.follows) ? merged.follows.map(s => String(s).toLowerCase().trim()).filter(Boolean) : [];
-  merged.priority = Array.isArray(merged.priority) ? merged.priority.map(s => String(s).toLowerCase().trim()).filter(Boolean) : [];
-  merged.followUnion = Array.from(new Set([...merged.follows, ...merged.priority]));
-  merged.follows_count = merged.follows.length;
-  merged.priority_count = merged.priority.length;
-  merged.followUnion_count = merged.followUnion.length;
-
-  state.settings = merged;
-  // Persist normalized settings under `settings` key so future loads are consistent
-  await chrome.storage.local.set({ settings: merged });
-  log('config_loaded', redactForDiag(merged));
-}
-
-// Tab helpers (fallback)
-const Tabs = {
-  async listOpenChannels() {
-    const tabs = await chrome.tabs.query({ url: ['*://www.twitch.tv/*', '*://twitch.tv/*'] });
-    const out = new Set();
-    for (const t of tabs) {
-      try {
-        const u = new URL(t.url);
-        const seg = u.pathname.split('/').filter(Boolean);
-        const login = seg[0]?.toLowerCase();
-        if (login && !['directory','videos','about','schedule','moderator'].includes(login)) {
-          out.add(login);
-        }
-      } catch {}
-    }
-    return [...out];
-  },
-
-  async openNeeded(liveList, maxTabs) {
-    const open = await this.listOpenChannels();
-    const slots = Math.max(0, (maxTabs || 0) - open.length);
-    const want = liveList.filter(x => !open.includes(x)).slice(0, slots);
-    for (const login of want) {
-      try {
-        await chrome.tabs.create({ url: `https://www.twitch.tv/${login}`, active: false });
-      } catch (e) {
-        log('open_err', { login, e: String(e) });
-      }
-    }
-    return { open, opened: want };
-  },
-
-  async closeOffline(liveSet) {
-    const tabs = await chrome.tabs.query({ url: ['*://www.twitch.tv/*', '*://twitch.tv/*'] });
-    for (const t of tabs) {
-      try {
-        const u = new URL(t.url);
-        const seg = u.pathname.split('/').filter(Boolean);
-        const login = (seg[0] || '').toLowerCase();
-        if (!login) continue;
-        if (['directory','videos','about','schedule','moderator'].includes(login)) continue;
-
-        if (!liveSet.has(login)) {
-          if (self.bgTabs?.shouldClose) {
-            const ok = await self.bgTabs.shouldClose(t, login, liveSet);
-            if (!ok) continue;
-          }
-          await chrome.tabs.remove(t.id);
-          log('closed_offline', { login });
-        }
-      } catch {}
-    }
-  }
-};
-// ---------- polling (with guard to avoid duplicate runs) ----------
-let _polling = false;
-
-export async function poll({ force = false } = {}) {
-  if (_polling) {
-    if (!force) {
-      log('poll_skip', 'busy');
-      return;
-    }
-    // Force requested: wait for current poll to finish (bounded) then proceed
-    try {
-      const maxWaitMs = 30_000;
-      const start = Date.now();
-      log('poll_waiting', { reason: 'waiting_for_current', maxWaitMs });
-      while (_polling && (Date.now() - start) < maxWaitMs) {
-        // small sleep
-        await new Promise(r => setTimeout(r, 250));
-      }
-      if (_polling) {
-        log('poll_skip', 'still_busy_after_wait');
-        return;
-      }
-    } catch (e) {
-      log('poll_wait_err', String(e));
-      return;
-    }
-  }
-  _polling = true;
-  log('poll_begin', { force });
 
   try {
-    await bootOnce();
-    const cfg = getSettings();
+    await chrome.alarms.create(TTM_REPOKE_ALARM, { periodInMinutes: 1 });
+  } catch {}
 
-    const openNow = await Tabs.listOpenChannels();
-    setOpenChannels(openNow);
-    const cap = Math.max(0, (cfg.max_tabs || 0) - openNow.length);
-
-    // live list (priority-aware) via bg.live.js
-    let liveSet = new Set();
-    try {
-      if (self.bgLive?.getLiveNowByConfigSafe) {
-        liveSet = await self.bgLive.getLiveNowByConfigSafe(cfg);
-      }
-    } catch (e) {
-      log('live_error', String(e));
-    }
-
-    const liveList = Array.from(liveSet);
-    setLastLive(liveList);
-    log('live_result', { count: liveList.length, source: cfg.live_source || 'auto' });
-
-    if (self.bgTabs?.reconcile) {
-      await self.bgTabs.reconcile({
-        liveList,
-        maxTabs: cfg.max_tabs,
-        priority: cfg.priority || []
-      });
-      // Also close any non-managed/open Twitch tabs that are offline (not in liveSet).
-      try {
-        await Tabs.closeOffline(liveSet);
-        log('closed_offline_extra', { note: 'closed non-managed offline tabs' });
-      } catch (e) {
-        log('closed_offline_extra_err', String(e));
-      }
-    } else {
-      await Tabs.openNeeded(liveList, cfg.max_tabs || 0);
-      await Tabs.closeOffline(liveSet);
-    }
-
-    const afterOpen = await Tabs.listOpenChannels();
-    setOpenChannels(afterOpen);
-    log('capacity', { open: afterOpen.length, max: cfg.max_tabs || 0 });
-  } finally {
-    _polling = false;
-  }
-}
-
-// Expose poll to globals
-try {
-  if (typeof self === 'object' && self.TTM) self.TTM.poll = poll;
-  globalThis.poll = poll;
-} catch (e) { /* ignore in restricted environments */ }
-
-function ttmBuildUnion(settings) {
-  const f = Array.isArray(settings?.follows) ? settings.follows : [];
-  const p = Array.isArray(settings?.priority) ? settings.priority : [];
-  const u = Array.from(new Set([...f, ...p].map(s => String(s).toLowerCase())));
-  return u;
-}
-
-async function ttmHydrateCounts() {
-  if (!state || !state.settings) return;
-  
-  // Ensure arrays exist
-  state.settings.follows = Array.isArray(state.settings.follows) ? state.settings.follows : [];
-  state.settings.priority = Array.isArray(state.settings.priority) ? state.settings.priority : [];
-  
-  // Build union list from follows and priority
-  const allChannels = [...state.settings.follows, ...state.settings.priority];
-  state.settings.followUnion = [...new Set(allChannels.map(s => String(s).toLowerCase().trim()).filter(Boolean))];
-  
-  // Update counts
-  state.settings.follows_count = state.settings.follows.length;
-  state.settings.priority_count = state.settings.priority.length;
-  state.settings.followUnion_count = state.settings.followUnion.length;
-  
-  log('counts_updated', {
-    follows: state.settings.follows_count,
-    priority: state.settings.priority_count,
-    union: state.settings.followUnion_count
+  booted = true;
+  log("boot", {
+    enabled: state.settings.enabled,
+    everySec: state.settings.check_interval_sec
   });
-  
-  await chrome.storage.local.set({ settings: state.settings });
 }
 
-let ttmBooted = false;
-async function ttmBootOnce(){
-  if (ttmBooted) return;
-  if (typeof reloadConfig === 'function') await reloadConfig();
-  if (typeof ensureAlarm === 'function') await ensureAlarm();
-  ttmBooted = true;
-  log?.('boot', { enabled: state?.settings?.enabled === true, everySec: state?.settings?.check_interval_sec });
+chrome.runtime.onInstalled.addListener(() => {
+  booted = false;
+  bootOnce().catch((e) => log("boot_err", String(e)));
+});
 
-// Do not use top-level await in service worker; call and ignore completion here
-ttmHydrateCounts().catch(() => {});
-}
-chrome.runtime.onInstalled.addListener(()=>{ ttmBooted = false; ttmBootOnce(); });
-chrome.runtime.onStartup?.addListener(()=>{ ttmBooted = false; ttmBootOnce(); });
-ttmBootOnce();
+chrome.runtime.onStartup?.addListener(() => {
+  booted = false;
+  bootOnce().catch((e) => log("boot_err", String(e)));
+});
 
-// Message routing
-const NAME_MAP = new Map([
-  ['ttm/ping','ping'], ['ttm/enable','toggle'], ['ttm/reload_config','reload'],
-  ['ttm/force_poll','force'], ['ttm/diagnose','diag'],
-  ['ttm_ping','ping'], ['ttm_toggle','toggle'], ['ttm_reload_config','reload'],
-  ['ttm_force_poll','force'], ['ttm_diagnose','diag'],
-  ['ping','ping'], ['toggle','toggle'], ['reload_config','reload'],
-  ['force_poll','force'], ['diagnose','diag'],
-  ['TTM_DIAG','diag'], ['TTM_DIAGNOSE','diag']
-]);
-  // Debug helper: request the raw storage contents
-  (globalThis.TTM_NAME_MAP || map)?.set?.('TTM_GET_STORAGE', 'get_storage');
-  (globalThis.TTM_NAME_MAP || map)?.set?.('ttm_get_storage', 'get_storage');
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm?.name === "ttm-tick") {
+    poll().catch((e) => log("alarm_poll_error", String(e)));
+    return;
+  }
 
-const normalizeType = (t) => {
-  if (!t) return '';
-  const key = String(t).trim();
-  return NAME_MAP.get(key.toLowerCase()) || NAME_MAP.get(key) || '';
-};
+  if (alarm?.name === TTM_REPOKE_ALARM) {
+    repokeManagedTabs().catch((e) => log("alarm_repoke_error", String(e)));
+  }
+});
+
 chrome.runtime.onMessage.addListener((msg, _sender, send) => {
   (async () => {
-    const kind = normalizeType(msg?.type);
-    const _kind = globalThis.TTM_NORMALIZE?.(msg?.type) || '';
-    // Log incoming messages for easier debugging of popup <-> background comms
-    try { log('msg_received', { raw: msg?.type, kind, alt: _kind }); } catch {}
     await bootOnce();
-    // === [TTM PATCH A.2 — additive branches] ===
-  if (_kind === 'ping') {
-  send({ ok:true, alive:true, enabled: state?.settings?.enabled === true });
-  return;
-  }
-  if (_kind === 'toggle') {
-  const on = (msg?.enabled === undefined) ? !(state?.settings?.enabled === true) : !!msg.enabled;
-  const next = { ...(state.settings||{}), enabled: on };
-  await chrome.storage.local.set({ settings: next });
-  state.settings = next;
-  if (typeof ensureAlarm === 'function') await ensureAlarm();
-  log?.('toggle', { enabled: on });
-  send({ ok:true, enabled:on });
-  return;
-  }
-  if (_kind === 'reload') {
-  if (typeof reloadConfig === 'function') await reloadConfig();
-  if (typeof ensureAlarm === 'function') await ensureAlarm();
-  send({ ok:true, settings: (state?.settings || {}) });
-  return;
-  }
-  if (_kind === 'force') {
-  log?.('poll_start', { mode: state?.settings?.live_source || 'auto', enabled: state?.settings?.enabled === true, force:true });
-  if (typeof poll === 'function') await poll({ force:true });
-  send({ ok:true });
-  return;
-  }
-  if (_kind === 'diag') {
-  const d = (typeof diagnose === 'function') ? await diagnose() : { ok:true };
-  send(d);
-  return;
-  }
+    const kind = normalizeType(msg?.type);
 
-    if (kind === 'ping') {
-      send({ ok: true, alive: true, enabled: state.settings.enabled });
-      return;
-    }
-    if (kind === 'toggle') {
-      const on = !!msg?.enabled ? true : !state.settings.enabled;
-      await saveSettings({ ...state.settings, enabled: on });
-      await ensureAlarm();
-      log('toggle', { enabled: on });
-      send({ ok: true, enabled: on });
-      return;
-    }
-    if (kind === 'reload') {
-      await reloadConfig();
-      await ensureAlarm();
-      send({ ok: true, settings: redactForDiag(state.settings) });
-      return;
-    }
-    if (kind === 'force') {
-      if (!(state.settings.follows?.length) && !(state.settings.priority?.length)) {
-        await reloadConfig(); // make sure file lists are present
-      }
-      log('poll_start', {
-        mode: state.settings.live_source || 'auto',
-        enabled: state.settings.enabled,
-        force: true
+    if (kind === "ping") {
+      return void send({
+        ok: true,
+        alive: true,
+        enabled: state.settings.enabled !== false
       });
-      await poll({ force: true });
-      send({ ok: true });
-      return;
-    }
-    if (kind === 'diag') {
-      const d = await diagnose();
-      send(d);
-      return;
     }
 
-    if (kind === 'get_storage') {
-      try {
-        const all = await new Promise(r => chrome.storage.local.get(null, r));
-        send({ ok: true, storage: all });
-      } catch (e) {
-        send({ ok: false, error: String(e) });
+    if (kind === "toggle") {
+      const on = msg?.enabled === undefined ? !state.settings.enabled : !!msg.enabled;
+      const enabled = await setEnabled(on);
+
+      state.settings = {
+        ...state.settings,
+        enabled
+      };
+
+      await chrome.storage.local.set({
+        settings: state.settings,
+        config: state.settings,
+        enabled
+      });
+
+      return void send({ ok: true, enabled });
+    }
+
+    if (kind === "reload") {
+      await loadSettings();
+      await ensureAlarm();
+      return void send({ ok: true, settings: redactForDiag(state.settings) });
+    }
+
+    if (kind === "force") {
+      log("poll_start", { enabled: state.settings.enabled !== false, force: true });
+      const result = await poll({ force: true });
+      return void send(result);
+    }
+
+    if (kind === "diag" || kind === "diagnose") {
+      return void send(await diagnose());
+    }
+
+    if (kind === "fetch_follows") {
+      return void send(await fetchMyFollows(msg?.mode || "active"));
+    }
+
+    if (kind === "get_logs") {
+      return void send({ ok: true, logs: Array.isArray(state.logs) ? state.logs.slice(-200) : [] });
+    }
+
+    if (kind === "clear_logs") {
+      state.logs = [];
+      await chrome.storage.local.remove("ttm_logs_v1");
+      return void send({ ok: true });
+    }
+        if (kind === "ttm_player_status") {
+      const tabId = _sender?.tab?.id;
+      if (tabId != null) {
+        const prev = getPlayerStatus(tabId);
+        const wasBad = !!(prev && prev.hasVideo && !prev.adPlaying && (prev.paused || prev.muted));
+
+        const next = {
+          login: normalizeName(msg?.login),
+          hasVideo: !!msg?.hasVideo,
+          paused: !!msg?.paused,
+          muted: !!msg?.muted,
+          volume: msg?.volume ?? null,
+          adPlaying: !!msg?.adPlaying,
+          visible: !!msg?.visible,
+          focused: !!msg?.focused
+        };
+
+        const isBad = !!(next.hasVideo && !next.adPlaying && (next.paused || next.muted));
+
+        if (isBad) {
+          next.firstSeenBadAt = wasBad && prev?.firstSeenBadAt ? prev.firstSeenBadAt : Date.now();
+        } else {
+          next.firstSeenBadAt = 0;
+        }
+
+        rememberPlayerStatus(tabId, next);
       }
-      return;
-    }
 
-  send({
-  ok:false,
-  error:'unknown_message',
-  received:{ type: msg?.type },
-  accepted_types: Array.from(globalThis.TTM_NAME_MAP?.keys?.() || [])
+      return void send({ ok: true });
+    }
+    return void send({
+      ok: false,
+      error: "unknown_message",
+      received: { type: msg?.type },
+      accepted_types: ACCEPTED_TYPES
+    });
+  })().catch((e) => {
+    log("msg_err", String(e));
+    try {
+      send({ ok: false, error: "handler_crash", detail: String(e) });
+    } catch {}
   });
 
-  })().catch(e => { log('msg_err', String(e)); send({ ok:false, error:String(e) }); });
-
-  // keep port open for async
   return true;
 });
 
-// Service worker lifecycle
-chrome.runtime.onInstalled.addListener(async () => {
-  // Initialize settings if they don't exist
-  const { settings } = await chrome.storage.local.get(['settings']);
-  if (!settings) {
-    await chrome.storage.local.set({ settings: getDefaultConfig() });
-  }
-  // Update followUnion/counts even if settings exist
-  await ttmHydrateCounts();
-  booted = false;
-  await bootOnce();
-});
-
-chrome.runtime.onStartup?.addListener(async () => {
-  booted = false;
-  await bootOnce();
-});
-
-// kick it off
-bootOnce().catch(e => log('boot_err', String(e)));
+bootOnce().catch((e) => log("boot_err", String(e)));
