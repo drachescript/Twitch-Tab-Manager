@@ -1,9 +1,8 @@
 # Twitch Tab Manager
 
-Opens Twitch stream tabs for your followed channels, tries to keep them playing, avoids duplicates, and respects a max tab limit.
+Opens Twitch stream tabs for your followed channels, keeps manager-opened Twitch tabs grouped together where possible, tries to keep playback alive, de-duplicates per channel, and respects a strict max open tab limit. Built for local use, Windows-friendly, and easy to share with friends.
 
-Main goal: help manage Twitch tabs automatically without messing with tabs you opened yourself.
-
+It is designed to only auto-close tabs it believes it opened and manages itself.
 ---
 
 ## Table of Contents
@@ -130,8 +129,8 @@ Settings are stored locally. Typical example:
 * `priority` is separate from `follows`
 * `followUnion` is the combined set used internally
 * `max_tabs` is always enforced
-* `soft_wake_tabs` is meant for harder cases where Twitch background tabs stay paused/muted
-* `soft_wake_only_when_browser_focused` is meant to avoid interrupting games or other apps
+* `soft_wake_tabs` is intended for harder cases where Twitch background tabs stay paused/muted
+* `soft_wake_only_when_browser_focused` is meant to avoid interrupting gaming or other apps
 
 ---
 
@@ -200,13 +199,17 @@ curl -X POST "https://id.twitch.tv/oauth2/token" \
 
 ## How It Works
 
-The background worker checks who is live, compares that against already open Twitch tabs, and then opens or closes its own managed tabs as needed.
+The background worker loads settings, checks who is live, compares that list against already-open Twitch tabs, and opens or closes manager-controlled tabs as needed.
 
-To help with Twitch being Twitch, managed tabs can also get a few extra nudges after opening to help playback resume or stay active.
+For Twitch player reliability, managed tabs can receive:
 
-It should only auto-close tabs that the extension opened itself.
+* content scripts injected on Twitch channel pages
+* delayed re-pokes after opening
+* periodic re-pokes while they stay managed
 
-There is also some extra safety logic so a bad Twitch response or temporary empty live result does not instantly make it close everything.
+The extension is designed to only close tabs it believes it opened itself.
+
+It also includes safer handling around temporary empty live results so Twitch hiccups are less likely to close everything at once.
 
 ---
 
@@ -280,18 +283,16 @@ There is also some extra safety logic so a bad Twitch response or temporary empt
 
 ### Tabs close and reopen unexpectedly
 
-This should be better than in older builds, but Twitch can still be weird sometimes.
-
-* Check Diagnostics/logs to see if Twitch returned an empty or inconsistent result
-* Make sure manual Twitch tabs are not confusing the manager
-* Try **Force Poll** again after a short wait
-
+* This should be improved compared with older builds
+* Check Diagnostics and logs to see whether Twitch returned a temporary empty live set or inconsistent page results
+* Make sure duplicate/manual Twitch tabs are not confusing ownership detection
+* If needed, Force Poll again after a short wait
 ---
 
 ## Feedback & Support
 
-* Bugs and feature requests: [https://github.com/drachescript/Twitch-Tab-Manager/issues/new/choose](https://github.com/drachescript/Twitch-Tab-Manager/issues/new/choose)
-* Source code and README: [https://github.com/drachescript/Twitch-Tab-Manager](https://github.com/drachescript/Twitch-Tab-Manager)
+* Bugs and feature requests: https://github.com/drachescript/Twitch-Tab-Manager/issues/new/choose
+* Source code / README / project page: https://github.com/drachescript/Twitch-Tab-Manager
 
 ---
 
@@ -303,7 +304,7 @@ Yes, but Helix is more reliable.
 
 ### Does it close my own manually opened Twitch tabs?
 
-It should not. Only manager-opened tabs are supposed to be auto-closed.
+It is designed not to. Only manager-opened tabs should be auto-closed.
 
 ### Can I keep certain channels preferred?
 
@@ -316,15 +317,14 @@ Not perfectly. Browser autoplay/background restrictions still apply, so some cas
 ### Where is my data stored?
 
 Settings, follows, and related extension state are stored locally in your browser. Exported files such as `config.json` or `follows.txt` are only created when you choose to export them.
-
 ---
 
 ## Privacy Policy
 
-Twitch Tab Manager runs locally in your browser. It does not use analytics or ads, and it does not collect or sell your data.
+Twitch Tab Manager runs locally in your browser. It does not use developer-controlled servers, analytics, or advertising, and it does not collect, sell, or share personal data.
 
-Full privacy policy:
-[https://docs.google.com/document/d/1SkvBWapQawvzuhaYT-iHOoUSV0go4PgFhtxi6Z6nwjA/edit?tab=t.0](https://docs.google.com/document/d/1SkvBWapQawvzuhaYT-iHOoUSV0go4PgFhtxi6Z6nwjA/edit?tab=t.0)
+A fuller privacy policy is available here:
+https://docs.google.com/document/d/1SkvBWapQawvzuhaYT-iHOoUSV0go4PgFhtxi6Z6nwjA/edit?tab=t.0
 
 ---
 
@@ -334,9 +334,9 @@ All notable changes use `DD/MM/YYYY`.
 
 ### [1.0.8] — in development
 
-* More safety around offline / raid closing
-* Options page polish so it matches the newer features better
-* Small cleanup and fixes
+* Ongoing work on safer offline / raid close behavior
+* Options UI catch-up for newer background features
+* General polish and sync updates
 
 ### [1.0.7] — 13/03/2026
 

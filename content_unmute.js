@@ -5,14 +5,17 @@
   const $ = (sel) => document.querySelector(sel);
 
   const state = {
-    settings: {
-      force_unmute: false,
-      unmute_streams: false,
-      force_resume: false,
-      autoplay_streams: false
-    },
-    loopStarted: false,
-    lastStatusSentAt: 0
+  settings: {
+    force_unmute: false,
+    unmute_streams: false,
+    force_resume: false,
+    autoplay_streams: false
+  },
+  loopStarted: false,
+  lastStatusSentAt: 0,
+  directUnmuteBlockedUntil: 0,
+  playBlockedUntil: 0,
+  lastGuardLogAt: 0
   };
 
   function wait(ms) {
@@ -77,7 +80,83 @@
   function canSafelyForceUnmute() {
     return !document.hidden && document.hasFocus();
   }
+function guardLog(kind, extra = {}) {
+  const now = Date.now();
+  if (now - state.lastGuardLogAt < 10000) return;
+  state.lastGuardLogAt = now;
 
+  try {
+    chrome.runtime.sendMessage({
+      type: "TTM_PLAYER_STATUS",
+      ...collectStatus(),
+      guard_event: kind,
+      ...extra
+    }, () => {});
+  } catch {}
+}
+
+function canTryDirectUnmute(video) {
+  if (!video) return false;
+  if (Date.now() < state.directUnmuteBlockedUntil) return false;
+  if (!canSafelyForceUnmute()) return false;
+
+  // Avoid poking too early before media is actually ready.
+  if (typeof video.readyState === "number" && video.readyState < 2) return false;
+
+  return true;
+}
+
+function isUserGestureUnmuteError(err) {
+  const msg = String(err?.message || err || "").toLowerCase();
+  return (
+    msg.includes("user didn't interact") ||
+    msg.includes("user did not interact") ||
+    msg.includes("play() failed") ||
+    msg.includes("notallowederror") ||
+    msg.includes("paused instead") ||
+    msg.includes("element was paused instead")
+  );
+}
+
+async function safeDirectUnmute(video) {
+  if (!canTryDirectUnmute(video)) return false;
+
+  try {
+    video.muted = false;
+    return !video.muted;
+  } catch (err) {
+    if (isUserGestureUnmuteError(err)) {
+      state.directUnmuteBlockedUntil = Date.now() + (5 * 60 * 1000);
+      guardLog("direct_unmute_backoff", { backoffMs: 5 * 60 * 1000 });
+      return false;
+    }
+
+    state.directUnmuteBlockedUntil = Date.now() + 60000;
+    guardLog("direct_unmute_error", { backoffMs: 60000 });
+    return false;
+  }
+}
+
+function canTryPlay(video) {
+  if (!video) return false;
+  if (Date.now() < state.playBlockedUntil) return false;
+  return true;
+}
+
+async function safePlay(video) {
+  if (!canTryPlay(video)) return false;
+  if (!video?.paused) return true;
+
+  try {
+    await video.play();
+    return !video.paused;
+  } catch (err) {
+    const backoffMs = isUserGestureUnmuteError(err) ? 5 * 60 * 1000 : 60000;
+    state.playBlockedUntil = Date.now() + backoffMs;
+    guardLog("play_backoff", { backoffMs });
+    return false;
+  }
+}
   async function clickUnmuteIfNeeded() {
     const btn = getMuteButton();
     if (!btn) return false;
@@ -150,40 +229,36 @@
   }
 
   async function enforceOnce() {
-    if (!isOnChannelPage()) return;
+  if (!isOnChannelPage()) return;
 
-    if (isAdPlaying()) {
-      await sendStatus();
-      return;
-    }
-
-    const opts = state.settings || {};
-    const video = getVideo();
-
-    if (opts.force_unmute || opts.unmute_streams) {
-      await clickUnmuteIfNeeded();
-
-      // Do not force video.muted = false in a background tab.
-      // Chrome can treat that like autoplay-with-sound and pause playback.
-      if (video && canSafelyForceUnmute()) {
-        try {
-          video.muted = false;
-        } catch {}
-      }
-    }
-
-    if (opts.force_resume || opts.autoplay_streams) {
-      await clickPlayIfNeeded();
-
-      if (video?.paused) {
-        try {
-          await video.play();
-        } catch {}
-      }
-    }
-
+  if (isAdPlaying()) {
     await sendStatus();
+    return;
   }
+
+  const opts = state.settings || {};
+  const video = getVideo();
+
+  if (opts.force_unmute || opts.unmute_streams) {
+    await clickUnmuteIfNeeded();
+
+    // Only try direct unmute in a safe foreground situation.
+    // If Chrome rejects it once, back off for a while instead of hammering.
+    if (video) {
+      await safeDirectUnmute(video);
+    }
+  }
+
+  if (opts.force_resume || opts.autoplay_streams) {
+    await clickPlayIfNeeded();
+
+    if (video?.paused) {
+      await safePlay(video);
+    }
+  }
+
+  await sendStatus();
+}
 
   async function startLoop() {
     if (state.loopStarted) return;

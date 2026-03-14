@@ -11,6 +11,8 @@ const CFG_DEFAULT = {
   unmute_streams: true,
   force_resume: true,
   autoplay_streams: false,
+  soft_wake_tabs: false,
+  soft_wake_only_when_browser_focused: true,
   check_interval_sec: 60,
   max_tabs: 4,
   enabled: true,
@@ -76,6 +78,8 @@ function clampConfig(input) {
   cfg.unmute_streams = parseBool(cfg.unmute_streams, true);
   cfg.force_resume = parseBool(cfg.force_resume, true);
   cfg.autoplay_streams = parseBool(cfg.autoplay_streams, false);
+  cfg.soft_wake_tabs = parseBool(cfg.soft_wake_tabs, false);
+  cfg.soft_wake_only_when_browser_focused = parseBool(cfg.soft_wake_only_when_browser_focused, true);
 
   cfg.check_interval_sec = Math.max(10, Number(cfg.check_interval_sec || 60) || 60);
   cfg.max_tabs = Math.max(1, Number(cfg.max_tabs || 4) || 4);
@@ -120,7 +124,7 @@ function getStoredConfig(bag) {
 async function writeConfigEverywhere(rawCfg) {
   const cfg = clampConfig(rawCfg);
 
-  await chrome.storage.local.set({
+   await chrome.storage.local.set({
     settings: cfg,
     config: cfg,
     enabled: cfg.enabled,
@@ -129,28 +133,70 @@ async function writeConfigEverywhere(rawCfg) {
     unmute_streams: cfg.unmute_streams,
     force_resume: cfg.force_resume,
     autoplay_streams: cfg.autoplay_streams,
+    soft_wake_tabs: cfg.soft_wake_tabs,
+    soft_wake_only_when_browser_focused: cfg.soft_wake_only_when_browser_focused,
     check_interval_sec: cfg.check_interval_sec,
     max_tabs: cfg.max_tabs,
     follows: cfg.follows,
     priority: cfg.priority,
     followUnion: cfg.followUnion,
-    blacklist: cfg.blacklist,
-    follows_count: cfg.follows.length,
-    priority_count: cfg.priority.length,
-    followUnion_count: cfg.followUnion.length
+    blacklist: cfg.blacklist
   });
 
   return cfg;
 }
+function fillQuickSettings(cfg) {
+  const liveSource = $("#liveSource");
+  const checkInterval = $("#checkIntervalSec");
+  const maxTabs = $("#maxTabs");
+  const enabled = $("#enabledSelect");
+  const forceUnmute = $("#forceUnmute");
+  const unmuteStreams = $("#unmuteStreams");
+  const forceResume = $("#forceResume");
+  const autoplayStreams = $("#autoplayStreams");
+  const softWakeTabs = $("#softWakeTabs");
+  const softWakeFocusedOnly = $("#softWakeFocusedOnly");
+  const blacklistBox = $("#blacklistBox");
 
+  if (liveSource) liveSource.value = cfg.live_source || "auto";
+  if (checkInterval) checkInterval.value = String(cfg.check_interval_sec ?? 60);
+  if (maxTabs) maxTabs.value = String(cfg.max_tabs ?? 4);
+  if (enabled) enabled.value = String(cfg.enabled !== false);
+  if (forceUnmute) forceUnmute.checked = !!cfg.force_unmute;
+  if (unmuteStreams) unmuteStreams.checked = !!cfg.unmute_streams;
+  if (forceResume) forceResume.checked = !!cfg.force_resume;
+  if (autoplayStreams) autoplayStreams.checked = !!cfg.autoplay_streams;
+  if (softWakeTabs) softWakeTabs.checked = !!cfg.soft_wake_tabs;
+  if (softWakeFocusedOnly) softWakeFocusedOnly.checked = !!cfg.soft_wake_only_when_browser_focused;
+  if (blacklistBox) blacklistBox.value = uniqNames(cfg.blacklist).join("\n");
+}
+
+function readQuickSettings(baseCfg = {}) {
+  return clampConfig({
+    ...baseCfg,
+    live_source: $("#liveSource")?.value || baseCfg.live_source || "auto",
+    check_interval_sec: Number($("#checkIntervalSec")?.value || baseCfg.check_interval_sec || 60),
+    max_tabs: Number($("#maxTabs")?.value || baseCfg.max_tabs || 4),
+    enabled: parseBool($("#enabledSelect")?.value, baseCfg.enabled !== false),
+    force_unmute: !!$("#forceUnmute")?.checked,
+    unmute_streams: !!$("#unmuteStreams")?.checked,
+    force_resume: !!$("#forceResume")?.checked,
+    autoplay_streams: !!$("#autoplayStreams")?.checked,
+    soft_wake_tabs: !!$("#softWakeTabs")?.checked,
+    soft_wake_only_when_browser_focused: !!$("#softWakeFocusedOnly")?.checked,
+    blacklist: uniqNames(($("#blacklistBox")?.value || "").split("\n"))
+  });
+}
 async function loadUI() {
   const bag = await readStorage();
   const cfg = getStoredConfig(bag);
   const follows = Array.isArray(bag.follows) && bag.follows.length ? uniqNames(bag.follows) : cfg.follows.length ? cfg.follows : await packagedFollows();
   const priority = Array.isArray(bag.priority) && bag.priority.length ? uniqNames(bag.priority) : cfg.priority;
 
-  cfgTA.value = JSON.stringify({ ...cfg, follows, priority, followUnion: uniqNames([...follows, ...priority]) }, null, 2);
+  const fullCfg = clampConfig({ ...cfg, follows, priority, followUnion: uniqNames([...follows, ...priority]) });
+  cfgTA.value = JSON.stringify(fullCfg, null, 2);
   folTA.value = follows.join("\n");
+  fillQuickSettings(fullCfg);
 
   const priorityBox = $("#priorityBox");
   if (priorityBox) priorityBox.value = priority.join("\n");
@@ -460,7 +506,45 @@ function setupFollowButtons() {
     else err(folStatus, "Reload failed.");
   });
 }
+async function saveQuickSettings({ reload = false } = {}) {
+  try {
+    const bag = await readStorage();
+    const cfg = getStoredConfig(bag);
+    const follows = uniqNames(Array.isArray(bag.follows) ? bag.follows : cfg.follows);
+    const priority = uniqNames(Array.isArray(bag.priority) ? bag.priority : cfg.priority);
 
+    const nextCfg = readQuickSettings({
+      ...cfg,
+      follows,
+      priority,
+      followUnion: uniqNames([...follows, ...priority])
+    });
+
+    await writeConfigEverywhere(nextCfg);
+    cfgTA.value = JSON.stringify(nextCfg, null, 2);
+
+    if (reload) {
+      const resp = await rpc("ttm/reload_config");
+      if (resp?.ok) ok($("#quickStatus"), "Quick settings saved and reloaded.");
+      else err($("#quickStatus"), "Saved quick settings, but reload failed.");
+      return;
+    }
+
+    ok($("#quickStatus"), "Quick settings saved.");
+  } catch {
+    err($("#quickStatus"), "Quick settings save failed.");
+  }
+}
+
+function setupQuickSettings() {
+  $("#quickSave")?.addEventListener("click", () => {
+    saveQuickSettings({ reload: false });
+  });
+
+  $("#quickApplyReload")?.addEventListener("click", () => {
+    saveQuickSettings({ reload: true });
+  });
+}
 function setupPriorityEditor() {
   const box = $("#priorityBox");
   const save = $("#prioritySave");
@@ -591,6 +675,7 @@ async function init() {
   setupTabs();
   setupConfigButtons();
   setupFollowButtons();
+  setupQuickSettings();
   setupPriorityEditor();
   setupTokenTools();
   setupDebugPanel();

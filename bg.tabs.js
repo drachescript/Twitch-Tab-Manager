@@ -1,10 +1,12 @@
 import { log } from "./bg.core.js";
 
 const RE_CHAN = /^https?:\/\/(?:www\.)?twitch\.tv\/([a-z0-9_]+)(?:\/|$)/i;
-const SESSION_KEY = "ttm.managed";
+const CHANNEL_KEY = "ttm.managed.channels";
+const OWNED_KEY = "ttm.managed.owned";
 const OPENING_TTL_MS = 5000;
 
-let managed = {};
+let managedChannels = {};
+let ownedTabs = {};
 const opening = new Map();
 
 function now() {
@@ -27,29 +29,40 @@ function purgeOpening() {
   }
 }
 
-async function loadManaged() {
-  const bag = await chrome.storage.session.get(SESSION_KEY);
-  const value = bag?.[SESSION_KEY];
-  managed = value && typeof value === "object" ? value : {};
+async function loadManagedState() {
+  const bag = await chrome.storage.session.get([CHANNEL_KEY, OWNED_KEY]);
+  managedChannels = bag?.[CHANNEL_KEY] && typeof bag[CHANNEL_KEY] === "object" ? bag[CHANNEL_KEY] : {};
+  ownedTabs = bag?.[OWNED_KEY] && typeof bag[OWNED_KEY] === "object" ? bag[OWNED_KEY] : {};
 }
 
-async function saveManaged() {
-  await chrome.storage.session.set({ [SESSION_KEY]: managed });
+async function saveManagedState() {
+  await chrome.storage.session.set({
+    [CHANNEL_KEY]: managedChannels,
+    [OWNED_KEY]: ownedTabs
+  });
 }
 
 async function rehydrateManagedFromReality() {
-  const next = {};
+  const nextChannels = {};
+  const nextOwned = {};
 
-  for (const [channel, tabId] of Object.entries(managed)) {
+  for (const [tabIdRaw] of Object.entries(ownedTabs)) {
+    const tabId = Number(tabIdRaw);
+    if (!tabId) continue;
+
     try {
       const tab = await chrome.tabs.get(tabId);
       const actual = chanFromUrl(tab.url || tab.pendingUrl || "");
-      if (actual === channel) next[channel] = tabId;
+      if (!actual) continue;
+
+      nextOwned[String(tabId)] = true;
+      nextChannels[actual] = tabId;
     } catch {}
   }
 
-  managed = next;
-  await saveManaged();
+  managedChannels = nextChannels;
+  ownedTabs = nextOwned;
+  await saveManagedState();
 }
 
 async function findExistingChannelTab(channel) {
@@ -121,20 +134,46 @@ async function scanOpenDesiredChannels(desiredList) {
   return out;
 }
 
-function priorityRanker(priority) {
-  const set = new Set((priority || []).map(norm));
-  return (channel) => (set.has(channel) ? 0 : 1);
+function buildPriorityMap(priority) {
+  const map = new Map();
+  (priority || []).map(norm).forEach((channel, index) => {
+    if (!map.has(channel)) map.set(channel, index);
+  });
+  return map;
 }
 
-async function closeOneLowRank(openSet, priority) {
-  const rank = priorityRanker(priority);
-  const candidates = Array.from(openSet).sort((a, b) => rank(b) - rank(a));
-  const pick = candidates.find((channel) => rank(channel) === 1 && managed[channel]);
+function getChannelRank(channel, priorityMap) {
+  const ch = norm(channel);
 
-  if (!pick) return null;
+  if (priorityMap.has(ch)) {
+    return priorityMap.get(ch);
+  }
 
-  await ensureClosed(pick);
-  return pick;
+  return 1000000;
+}
+
+function compareRank(a, b, priorityMap) {
+  return getChannelRank(a, priorityMap) - getChannelRank(b, priorityMap);
+}
+
+async function closeWorstManagedFor(candidateChannel, openSet, priorityMap) {
+  const candidateRank = getChannelRank(candidateChannel, priorityMap);
+
+  const managedOpen = Array.from(openSet)
+    .filter((channel) => managedChannels[channel])
+    .sort((a, b) => compareRank(b, a, priorityMap));
+
+  if (!managedOpen.length) return null;
+
+  const worstOpen = managedOpen[0];
+  const worstRank = getChannelRank(worstOpen, priorityMap);
+
+  if (candidateRank >= worstRank) {
+    return null;
+  }
+
+  await ensureClosed(worstOpen);
+  return worstOpen;
 }
 
 export async function ensureOpen(channel, via = "manager") {
@@ -144,13 +183,13 @@ export async function ensureOpen(channel, via = "manager") {
   purgeOpening();
   log("ensure_open_start", { ch, via });
 
-  if (managed[ch]) {
+  if (managedChannels[ch]) {
     try {
-      await chrome.tabs.get(managed[ch]);
-      return managed[ch];
+      await chrome.tabs.get(managedChannels[ch]);
+      return managedChannels[ch];
     } catch {
-      delete managed[ch];
-      await saveManaged();
+      delete managedChannels[ch];
+      await saveManagedState();
     }
   }
 
@@ -187,8 +226,9 @@ export async function ensureOpen(channel, via = "manager") {
 
     const tab = await chrome.tabs.create(createOptions);
 
-    managed[ch] = tab.id;
-    await saveManaged();
+    ownedTabs[String(tab.id)] = true;
+    managedChannels[ch] = tab.id;
+    await saveManagedState();
 
     log("ensure_open_created", { ch, tabId: tab.id });
 
@@ -197,6 +237,10 @@ export async function ensureOpen(channel, via = "manager") {
 
     if (globalThis.TTM?.scheduleTabRepokes) {
       globalThis.TTM.scheduleTabRepokes(tab.id);
+    }
+
+    if (globalThis.TTM?.noteManagedOpen) {
+      globalThis.TTM.noteManagedOpen(ch);
     }
 
     return tab.id;
@@ -210,25 +254,29 @@ export async function ensureOpen(channel, via = "manager") {
 
 export async function ensureClosed(channel) {
   const ch = norm(channel);
-  const tabId = managed[ch];
+  const tabId = managedChannels[ch];
   if (!tabId) return false;
+
+  const isOwned = !!ownedTabs[String(tabId)];
+  if (!isOwned) return false;
 
   try {
     await chrome.tabs.remove(tabId);
   } catch {}
 
-  delete managed[ch];
-  await saveManaged();
+  delete managedChannels[ch];
+  delete ownedTabs[String(tabId)];
+  await saveManagedState();
   return true;
 }
 
 export async function reconcileTabs(live, cfg) {
-  await loadManaged();
+  await loadManagedState();
   await rehydrateManagedFromReality();
 
   const maxTabs = Math.max(1, Number(cfg?.max_tabs || 4));
   const priority = (cfg?.priority || []).map(norm);
-  const rank = priorityRanker(priority);
+  const priorityMap = buildPriorityMap(priority);
 
   const seen = new Set();
   const desired = [];
@@ -241,9 +289,8 @@ export async function reconcileTabs(live, cfg) {
   }
 
   desired.sort((a, b) => {
-    const aPri = priority.includes(a) ? 1 : 0;
-    const bPri = priority.includes(b) ? 1 : 0;
-    if (aPri !== bPri) return bPri - aPri;
+    const byPriority = compareRank(a, b, priorityMap);
+    if (byPriority !== 0) return byPriority;
 
     const aLive = globalThis.TTM_STAB?._get?.(a)?.lastLiveTs || 0;
     const bLive = globalThis.TTM_STAB?._get?.(b)?.lastLiveTs || 0;
@@ -252,7 +299,7 @@ export async function reconcileTabs(live, cfg) {
 
   const desiredAlreadyOpen = await scanOpenDesiredChannels(desired);
   const openSet = new Set([
-    ...Object.keys(managed),
+    ...Object.keys(managedChannels),
     ...Array.from(desiredAlreadyOpen)
   ]);
 
@@ -285,21 +332,24 @@ export async function reconcileTabs(live, cfg) {
       continue;
     }
 
-    if (rank(ch) === 0) {
-      const closed = await closeOneLowRank(openSet, priority);
+    try {
+      const closed = await closeWorstManagedFor(ch, openSet, priorityMap);
       if (closed) {
         openSet.delete(closed);
-        try {
-          const tabId = await ensureOpen(ch, "manager");
-          if (tabId) openSet.add(ch);
-        } catch (e) {
-          log("open_err", { login: ch, error: String(e) });
+
+        const tabId = await ensureOpen(ch, "manager");
+        if (tabId) {
+          openSet.add(ch);
         }
+
+        log("priority_preempt", { opened: ch, closed });
       }
+    } catch (e) {
+      log("priority_preempt_error", { login: ch, error: String(e) });
     }
   }
 
-  for (const ch of Object.keys(managed)) {
+  for (const ch of Object.keys(managedChannels)) {
     if (!seen.has(ch)) {
       await ensureClosed(ch);
       openSet.delete(ch);
@@ -308,8 +358,9 @@ export async function reconcileTabs(live, cfg) {
 }
 
 export async function listManaged() {
-  await loadManaged();
-  return Object.keys(managed).sort();
+  await loadManagedState();
+  await rehydrateManagedFromReality();
+  return Object.keys(managedChannels).sort();
 }
 
 try {

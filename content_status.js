@@ -3,6 +3,8 @@
   window.__TTM_STATUS_LOADED__ = true;
 
   const login = location.pathname.replace(/^\/+/, "").split("/")[0]?.toLowerCase() || "";
+  const startedAt = Date.now();
+  const STARTUP_OFFLINE_GRACE_MS = 12000;
 
   function hasOfflineText(node) {
     if (!node) return false;
@@ -11,15 +13,23 @@
   }
 
   function isOfflineNow() {
-    const offlineBadge = document.querySelector(".channel-status-info--offline strong");
-    const cardStat = document.querySelector(".ScMediaCardStatWrapper-sc-anph5i-0, .tw-media-card-stat");
     const liveBadge = document.querySelector('[data-a-target="stream-live-indicator"], .live-time, .tw-indicator-live');
-
-    if (offlineBadge && hasOfflineText(offlineBadge)) return true;
-    if (cardStat && hasOfflineText(cardStat)) return true;
     if (liveBadge) return false;
 
-    return Array.from(document.querySelectorAll("strong, div, span")).some(hasOfflineText);
+    const selectors = [
+      ".channel-status-info--offline strong",
+      '[data-a-target="channel-status-text"]',
+      '[data-test-selector="channel-status-text"]',
+      '[data-a-target="player-overlay-offline-channel-text"]',
+      '[data-test-selector="player-overlay-offline-channel-text"]'
+    ];
+
+    for (const selector of selectors) {
+      const node = document.querySelector(selector);
+      if (node && hasOfflineText(node)) return true;
+    }
+
+    return false;
   }
 
   function hasRaidText(text) {
@@ -40,11 +50,22 @@
 
     const leaveButton =
       document.querySelector('button[data-a-target="raid-leave-button"]') ||
+      document.querySelector('button[data-test-selector="raid-leave-button"]') ||
       Array.from(document.querySelectorAll("button")).find((btn) => hasRaidText(btn.textContent));
 
     if (raidBanner || leaveButton) return true;
 
-    return Array.from(document.querySelectorAll("div, span, strong")).some((el) => hasRaidText(el.textContent));
+    const textSelectors = [
+      '[data-a-target="raid-banner"]',
+      '[data-test-selector="raid-banner"]',
+      '[data-a-target="raid-notification"]',
+      '[data-test-selector="raid-notification"]'
+    ];
+
+    return textSelectors.some((selector) => {
+      const node = document.querySelector(selector);
+      return !!(node && hasRaidText(node.textContent));
+    });
   }
 
   let lastOffline = null;
@@ -58,9 +79,15 @@
 
   function check() {
     const offline = isOfflineNow();
+    const withinStartupGrace = Date.now() - startedAt < STARTUP_OFFLINE_GRACE_MS;
 
     if (offline !== lastOffline) {
       lastOffline = offline;
+
+      if (offline && withinStartupGrace) {
+        return;
+      }
+
       send("channel_status", { isOffline: !!offline });
     }
 
@@ -78,5 +105,6 @@
   });
 
   setInterval(check, 5000);
-  check();
+  setTimeout(check, 1500);
+  setTimeout(check, STARTUP_OFFLINE_GRACE_MS + 250);
 })();

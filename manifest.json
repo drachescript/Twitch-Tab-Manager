@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Twitch Tab Manager",
-  "description": "Opens a set of your followed Twitch channels, keeps them alive, and cleans up offline tabs.",
-  "version": "1.0.7",
+  "description": "Opens followed Twitch channels when live, avoids duplicates, and closes manager-opened tabs when streams end.",
+  "version": "1.0.8",
   "action": { "default_popup": "popup.html", "default_title": "Twitch Tab Manager" },
   "background": {
     "service_worker": "background.js",

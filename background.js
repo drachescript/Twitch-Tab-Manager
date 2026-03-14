@@ -1,6 +1,6 @@
 import { state, saveSettings, armAlarm, log, diagnose } from "./bg.core.js";
 import { ensureAlarm, setEnabled, normalizeType } from "./bg.compat.js";
-import { reconcileTabs, listManaged } from "./bg.tabs.js";
+import { reconcileTabs, listManaged, ensureClosed } from "./bg.tabs.js";
 import "./bg.live.js";
 import "./bg.stability.js";
 
@@ -30,8 +30,32 @@ const ACCEPTED_TYPES = [
   "TTM_FETCH_FOLLOWS",
   "TTM_GET_LOGS",
   "TTM_PLAYER_STATUS",
-  "TTM_CLEAR_LOGS"
+  "TTM_CLEAR_LOGS",
+  "channel_status",
+  "raid_detected"
 ];
+
+const TWITCH_CHANNEL_RX = /^https:\/\/www\.twitch\.tv\/(?!directory|p|videos|friends|inventory|drops|settings|messages|login|downloads|moderator)([^/?#]+)/i;
+const TTM_REPOKE_ALARM = "ttm-repoke";
+const REPOKE_DELAYS_MS = [1500, 4500, 9000];
+
+const OPEN_GRACE_MS = 20000;
+const REOPEN_COOLDOWN_MS = 90000;
+const RAID_CLOSE_DELAY_MS = 3 * 60 * 1000;
+const RAID_REOPEN_COOLDOWN_MS = 5 * 60 * 1000;
+
+const playerStatusByTab = new Map();
+const softWakeByTab = new Map();
+const openedAtByChannel = new Map();
+const reopenBlockedUntilByChannel = new Map();
+const raidTimers = new Map();
+const offlineTimers = new Map();
+const offlinePendingSinceByChannel = new Map();
+
+const OFFLINE_CLOSE_DELAY_MS = 45000;
+const SOFT_WAKE_MIN_STUCK_MS = 12000;
+const SOFT_WAKE_COOLDOWN_MS = 60000;
+const SOFT_WAKE_TAB_MS = 900;
 
 function parseBool(value, fallback) {
   if (value === true || value === false) return value;
@@ -92,6 +116,89 @@ function redactForDiag(settings = {}) {
   };
 }
 
+function isChannelUrl(url) {
+  try {
+    return TWITCH_CHANNEL_RX.test(String(url || ""));
+  } catch {
+    return false;
+  }
+}
+
+function channelFromUrl(url) {
+  try {
+    const match = String(url || "").match(TWITCH_CHANNEL_RX);
+    return match ? String(match[1] || "").trim().toLowerCase() : "";
+  } catch {
+    return "";
+  }
+}
+
+function rememberPlayerStatus(tabId, status) {
+  const prev = playerStatusByTab.get(tabId) || {};
+  playerStatusByTab.set(tabId, {
+    ...prev,
+    ...status,
+    seenAt: Date.now()
+  });
+}
+
+function getPlayerStatus(tabId) {
+  return playerStatusByTab.get(tabId) || null;
+}
+
+function noteManagedOpen(login) {
+  const key = normalizeName(login);
+  if (!key) return;
+
+  openedAtByChannel.set(key, Date.now());
+  reopenBlockedUntilByChannel.delete(key);
+  clearRaidTimer(key);
+  clearOfflineTimer(key);
+}
+
+function noteManagedClosed(login, cooldownMs = REOPEN_COOLDOWN_MS) {
+  const key = normalizeName(login);
+  if (!key) return;
+
+  reopenBlockedUntilByChannel.set(key, Date.now() + cooldownMs);
+  openedAtByChannel.delete(key);
+  clearRaidTimer(key);
+  clearOfflineTimer(key);
+}
+
+function clearRaidTimer(login) {
+  const key = normalizeName(login);
+  const timer = raidTimers.get(key);
+  if (timer) {
+    clearTimeout(timer);
+    raidTimers.delete(key);
+  }
+}
+
+function clearOfflineTimer(login) {
+  const key = normalizeName(login);
+  const timer = offlineTimers.get(key);
+  if (timer) {
+    clearTimeout(timer);
+    offlineTimers.delete(key);
+  }
+  offlinePendingSinceByChannel.delete(key);
+}
+
+function isInOpenGrace(login) {
+  const key = normalizeName(login);
+  const openedAt = openedAtByChannel.get(key);
+  if (!openedAt) return false;
+  return Date.now() - openedAt < OPEN_GRACE_MS;
+}
+
+function isReopenBlocked(login) {
+  const key = normalizeName(login);
+  const until = reopenBlockedUntilByChannel.get(key) || 0;
+  return until > Date.now();
+}
+
+
 async function loadSettings() {
   const bag = await chrome.storage.local.get(null);
 
@@ -129,13 +236,11 @@ async function fetchFollowLoginsFromPage(tabId) {
     target: { tabId },
     func: async () => {
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
       const normalizeName = (value) => String(value || "").trim().toLowerCase();
 
       const getFollowedCards = () => {
         const out = new Set();
 
-        // Main "Followed channels" cards on /directory/following/channels
         const cardLinks = Array.from(
           document.querySelectorAll(
             'main a[href^="/"], section a[href^="/"], [data-a-target="user-card-modal"] a[href^="/"]'
@@ -168,7 +273,7 @@ async function fetchFollowLoginsFromPage(tabId) {
       };
 
       const clickShowMore = () => {
-        const buttons = Array.from(document.querySelectorAll('button, a'));
+        const buttons = Array.from(document.querySelectorAll("button, a"));
         let clicked = false;
 
         for (const el of buttons) {
@@ -203,7 +308,6 @@ async function fetchFollowLoginsFromPage(tabId) {
 
       for (let i = 0; i < 20; i += 1) {
         const beforeCount = getFollowedCards().length;
-
         const clicked = clickShowMore();
 
         scroller.scrollTo({
@@ -308,86 +412,33 @@ async function fetchMyFollows(mode = "active") {
   }
 }
 
-async function poll({ force = false } = {}) {
-  await loadSettings();
-
-  if (!force && state.settings.enabled === false) {
-    log("poll_skip", { reason: "disabled" });
-    return { ok: true, skipped: "disabled" };
-  }
-
-  let liveList = [];
+async function pokeChannelTab(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["content_unmute.js", "content_status.js"]
+    });
+  } catch {}
 
   try {
-    const getter = globalThis.bgLive?.getLiveNowByConfigSafe;
-    const live = typeof getter === "function" ? await getter(state.settings) : [];
-    liveList = uniqNames(Array.isArray(live) ? live : [...(live || [])]);
-  } catch (e) {
-    log("poll_live_error", String(e));
-  }
-
-    if (liveList.length === 0 && state.openChannels.length > 0 && state.settings.followUnion.length > 0) {
-    log("poll_keep_open", {
-      reason: "transient_empty_live_set",
-      open_count: state.openChannels.length,
-      configured_count: state.settings.followUnion.length
+    await chrome.tabs.sendMessage(tabId, {
+      type: "TTM_ENFORCE",
+      settings: {
+        force_unmute: !!state.settings.force_unmute,
+        unmute_streams: !!state.settings.unmute_streams,
+        force_resume: !!state.settings.force_resume,
+        autoplay_streams: !!state.settings.autoplay_streams
+      }
     });
-  } else {
-    try {
-      await reconcileTabs(liveList, state.settings);
-    } catch (e) {
-      log("poll_reconcile_error", String(e));
-    }
-  }
-
-  try {
-    const managed = await listManaged();
-    state.lastLive = liveList;
-    state.openChannels = managed;
-
-    log("poll_done", {
-      live_count: liveList.length,
-      open_count: managed.length,
-      max_tabs: state.settings.max_tabs,
-      force: !!force
-    });
-
-    return {
-      ok: true,
-      live_count: liveList.length,
-      open_count: managed.length
-    };
-  } catch (e) {
-    log("poll_list_error", String(e));
-    return { ok: false, error: String(e) };
-  }
+  } catch {}
 }
 
-globalThis.TTM.poll = poll;
-globalThis.TTM.armAlarm = armAlarm;
-globalThis.TTM.getSettings = () => state.settings;
-
-const TWITCH_CHANNEL_RX = /^https:\/\/www\.twitch\.tv\/(?!directory|p|videos|friends|inventory|drops|settings|messages|login|downloads|moderator)([^/?#]+)/i;
-const TTM_REPOKE_ALARM = "ttm-repoke";
-const REPOKE_DELAYS_MS = [1500, 4500, 9000];
-
-const playerStatusByTab = new Map();
-const softWakeByTab = new Map();
-const SOFT_WAKE_MIN_STUCK_MS = 12000;
-const SOFT_WAKE_COOLDOWN_MS = 60000;
-const SOFT_WAKE_TAB_MS = 900;
-
-function rememberPlayerStatus(tabId, status) {
-  const prev = playerStatusByTab.get(tabId) || {};
-  playerStatusByTab.set(tabId, {
-    ...prev,
-    ...status,
-    seenAt: Date.now()
-  });
-}
-
-function getPlayerStatus(tabId) {
-  return playerStatusByTab.get(tabId) || null;
+function scheduleTabRepokes(tabId) {
+  for (const delay of REPOKE_DELAYS_MS) {
+    setTimeout(() => {
+      pokeChannelTab(tabId).catch(() => {});
+    }, delay);
+  }
 }
 
 function shouldSoftWake(tabId) {
@@ -414,7 +465,7 @@ async function canSoftWakeWithoutStealingFromOtherApps() {
   if (!state.settings.soft_wake_only_when_browser_focused) return true;
 
   try {
-    const currentWindow = await chrome.windows.getCurrent();
+    const currentWindow = await chrome.windows.getLastFocused();
     return !!currentWindow?.focused;
   } catch {
     return false;
@@ -497,52 +548,6 @@ async function reviewManagedTabsForSoftWake() {
   }
 }
 
-function isChannelUrl(url) {
-  try {
-    return TWITCH_CHANNEL_RX.test(String(url || ""));
-  } catch {
-    return false;
-  }
-}
-
-function channelFromUrl(url) {
-  try {
-    const match = String(url || "").match(TWITCH_CHANNEL_RX);
-    return match ? String(match[1] || "").trim().toLowerCase() : "";
-  } catch {
-    return "";
-  }
-}
-
-async function pokeChannelTab(tabId) {
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: ["content_unmute.js", "content_status.js"]
-    });
-  } catch {}
-
-  try {
-    await chrome.tabs.sendMessage(tabId, {
-      type: "TTM_ENFORCE",
-      settings: {
-        force_unmute: !!state.settings.force_unmute,
-        unmute_streams: !!state.settings.unmute_streams,
-        force_resume: !!state.settings.force_resume,
-        autoplay_streams: !!state.settings.autoplay_streams
-      }
-    });
-  } catch {}
-}
-
-function scheduleTabRepokes(tabId) {
-  for (const delay of REPOKE_DELAYS_MS) {
-    setTimeout(() => {
-      pokeChannelTab(tabId).catch(() => {});
-    }, delay);
-  }
-}
-
 async function repokeManagedTabs() {
   const managedChannels = new Set(await listManaged());
   if (!managedChannels.size) return;
@@ -564,7 +569,158 @@ async function repokeManagedTabs() {
   }
 }
 
+async function closeManagedChannelTab(login, reason = "manual", cooldownMs = REOPEN_COOLDOWN_MS) {
+  const key = normalizeName(login);
+  if (!key) return false;
+
+  const managedChannels = await listManaged();
+  if (!managedChannels.includes(key)) {
+    return false;
+  }
+
+  try {
+    const closed = await ensureClosed(key);
+    if (closed) {
+      noteManagedClosed(key, cooldownMs);
+      log("closed_channel_tab", { login: key, reason, cooldownMs });
+      return true;
+    }
+  } catch (e) {
+    log("close_channel_tab_error", { login: key, reason, error: String(e) });
+  }
+
+  return false;
+}
+
+function scheduleOfflineClose(login) {
+  const key = normalizeName(login);
+  if (!key) return;
+
+  if (raidTimers.has(key)) {
+    log("offline_close_skipped_raid_pending", { login: key });
+    return;
+  }
+
+  if (isInOpenGrace(key)) {
+    log("offline_ignored_in_open_grace", { login: key, graceMs: OPEN_GRACE_MS });
+    return;
+  }
+
+  if (offlineTimers.has(key)) {
+    return;
+  }
+
+  offlinePendingSinceByChannel.set(key, Date.now());
+
+  const timer = setTimeout(async () => {
+    offlineTimers.delete(key);
+
+    const pendingSince = offlinePendingSinceByChannel.get(key) || Date.now();
+    offlinePendingSinceByChannel.delete(key);
+
+    if (raidTimers.has(key)) {
+      log("offline_close_cancelled_raid_pending", { login: key });
+      return;
+    }
+
+    if (isInOpenGrace(key)) {
+      log("offline_close_cancelled_open_grace", { login: key });
+      return;
+    }
+
+    const closed = await closeManagedChannelTab(key, "offline", REOPEN_COOLDOWN_MS);
+    log("offline_close_fired", {
+      login: key,
+      delayMs: OFFLINE_CLOSE_DELAY_MS,
+      pendingMs: Date.now() - pendingSince,
+      closed
+    });
+  }, OFFLINE_CLOSE_DELAY_MS);
+
+  offlineTimers.set(key, timer);
+  log("offline_close_scheduled", { login: key, delayMs: OFFLINE_CLOSE_DELAY_MS });
+}
+
+function scheduleRaidClose(login) {
+  const key = normalizeName(login);
+  if (!key) return;
+
+  clearRaidTimer(key);
+
+  const timer = setTimeout(async () => {
+    raidTimers.delete(key);
+    await closeManagedChannelTab(key, "raid", RAID_REOPEN_COOLDOWN_MS);
+    log("raid_close_fired", { login: key, delayMs: RAID_CLOSE_DELAY_MS });
+  }, RAID_CLOSE_DELAY_MS);
+
+  raidTimers.set(key, timer);
+  log("raid_close_scheduled", { login: key, delayMs: RAID_CLOSE_DELAY_MS });
+}
+
+async function poll({ force = false } = {}) {
+  await loadSettings();
+
+  if (!force && state.settings.enabled === false) {
+    log("poll_skip", { reason: "disabled" });
+    return { ok: true, skipped: "disabled" };
+  }
+
+  let liveList = [];
+
+  try {
+    const getter = globalThis.bgLive?.getLiveNowByConfigSafe;
+    const live = typeof getter === "function" ? await getter(state.settings) : [];
+    liveList = uniqNames(Array.isArray(live) ? live : [...(live || [])]);
+  } catch (e) {
+    log("poll_live_error", String(e));
+  }
+
+  liveList = liveList.filter((login) => !isReopenBlocked(login));
+
+  const currentlyOpen = Array.isArray(state.openChannels) ? state.openChannels : [];
+
+  if (liveList.length === 0 && currentlyOpen.length > 0 && state.settings.followUnion.length > 0) {
+    log("poll_keep_open", {
+      reason: "transient_empty_live_set",
+      open_count: currentlyOpen.length,
+      configured_count: state.settings.followUnion.length
+    });
+  } else {
+    try {
+      await reconcileTabs(liveList, state.settings);
+    } catch (e) {
+      log("poll_reconcile_error", String(e));
+    }
+  }
+
+  try {
+    const managed = await listManaged();
+    state.lastLive = liveList;
+    state.openChannels = managed;
+
+    log("poll_done", {
+      live_count: liveList.length,
+      open_count: managed.length,
+      max_tabs: state.settings.max_tabs,
+      force: !!force
+    });
+
+    return {
+      ok: true,
+      live_count: liveList.length,
+      open_count: managed.length
+    };
+  } catch (e) {
+    log("poll_list_error", String(e));
+    return { ok: false, error: String(e) };
+  }
+}
+
+globalThis.TTM.poll = poll;
+globalThis.TTM.armAlarm = armAlarm;
+globalThis.TTM.getSettings = () => state.settings;
 globalThis.TTM.scheduleTabRepokes = scheduleTabRepokes;
+globalThis.TTM.noteManagedOpen = noteManagedOpen;
 
 chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
   if (info.status !== "complete") return;
@@ -621,7 +777,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 
-chrome.runtime.onMessage.addListener((msg, _sender, send) => {
+chrome.runtime.onMessage.addListener((msg, sender, send) => {
   (async () => {
     await bootOnce();
     const kind = normalizeType(msg?.type);
@@ -673,7 +829,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, send) => {
     }
 
     if (kind === "get_logs") {
-      return void send({ ok: true, logs: Array.isArray(state.logs) ? state.logs.slice(-200) : [] });
+      return void send({
+        ok: true,
+        logs: Array.isArray(state.logs) ? state.logs.slice(-200) : []
+      });
     }
 
     if (kind === "clear_logs") {
@@ -681,8 +840,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, send) => {
       await chrome.storage.local.remove("ttm_logs_v1");
       return void send({ ok: true });
     }
-        if (kind === "ttm_player_status") {
-      const tabId = _sender?.tab?.id;
+
+    if (kind === "ttm_player_status") {
+      const tabId = sender?.tab?.id;
       if (tabId != null) {
         const prev = getPlayerStatus(tabId);
         const wasBad = !!(prev && prev.hasVideo && !prev.adPlaying && (prev.paused || prev.muted));
@@ -711,6 +871,33 @@ chrome.runtime.onMessage.addListener((msg, _sender, send) => {
 
       return void send({ ok: true });
     }
+
+    if (kind === "channel_status") {
+  const login = normalizeName(msg?.login);
+  if (!login) {
+    return void send({ ok: false, error: "missing_login" });
+  }
+
+  if (msg?.isOffline) {
+    scheduleOfflineClose(login);
+    return void send({ ok: true, pending: true, delay_ms: OFFLINE_CLOSE_DELAY_MS });
+  }
+
+  clearOfflineTimer(login);
+  clearRaidTimer(login);
+  return void send({ ok: true, live: true });
+}
+
+    if (kind === "raid_detected") {
+      const login = normalizeName(msg?.login);
+      if (!login) {
+        return void send({ ok: false, error: "missing_login" });
+      }
+
+      scheduleRaidClose(login);
+      return void send({ ok: true, scheduled: true, delay_ms: RAID_CLOSE_DELAY_MS });
+    }
+
     return void send({
       ok: false,
       error: "unknown_message",
