@@ -332,10 +332,22 @@ Full privacy policy:
 
 All notable changes use `DD/MM/YYYY`.
 
-### [1.0.8] — in development
+### [1.0.8] — 14/03/2026
 
-* More safety around offline / raid closing
-* Options page polish so it matches the newer features better
+* More safety around offline closing
+* Added delayed offline close instead of closing on first offline report
+* Added safer raid/offline timer handling so pending raid close wins over offline close
+* Cleared pending offline/raid timers when a managed channel becomes live again
+* Managed tab closing now goes through the managed close helper for cleaner state tracking
+* Tightened offline detection in `content_status.js` to reduce false positives
+* Tightened raid detection in `content_status.js` to rely on more specific Twitch raid signals
+* Added Quick Settings to the Options page
+* Added Options controls for `enabled`, `live_source`, `check_interval_sec`, and `max_tabs`
+* Added Options controls for playback settings like unmute/resume/autoplay
+* Added Options controls for `soft_wake_tabs` and `soft_wake_only_when_browser_focused`
+* Added Options control for `blacklist`
+* Added quick save and save + reload actions in Options
+* Added config handling support for soft wake settings in Options
 * Small cleanup and fixes
 
 ### [1.0.7] — 13/03/2026
