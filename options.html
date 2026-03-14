@@ -52,9 +52,56 @@
 
   <!-- SETTINGS -->
   <section id="panel-settings" class="panel active">
-    <p class="note">These values override the packaged files. Export/Import for backup or migration.</p>
+  <p class="note">These values override the packaged files. Export/Import for backup or migration.</p>
 
+  <section>
+    <h3>Quick Settings</h3>
+    <p class="small">These controls update the same stored config as the JSON box below.</p>
     <div class="grid">
+      <div>
+        <div class="two">
+          <label><strong>Live Source</strong><br><select id="liveSource">
+            <option value="auto">auto</option>
+            <option value="helix">helix</option>
+            <option value="following_html">following_html</option>
+          </select></label>
+          <label><strong>Check Interval (sec)</strong><br><input id="checkIntervalSec" type="number" min="10" step="1"></label>
+          <label><strong>Max Tabs</strong><br><input id="maxTabs" type="number" min="1" step="1"></label>
+          <label><strong>Enabled</strong><br><select id="enabledSelect">
+            <option value="true">Enabled</option>
+            <option value="false">Disabled</option>
+          </select></label>
+        </div>
+
+        <h4>Playback</h4>
+        <div class="two">
+          <label><input id="forceUnmute" type="checkbox"> Force unmute</label>
+          <label><input id="unmuteStreams" type="checkbox"> Unmute streams</label>
+          <label><input id="forceResume" type="checkbox"> Force resume</label>
+          <label><input id="autoplayStreams" type="checkbox"> Autoplay streams</label>
+        </div>
+
+        <h4>Soft Wake</h4>
+        <div class="two">
+          <label><input id="softWakeTabs" type="checkbox"> Enable soft wake for managed tabs</label>
+          <label><input id="softWakeFocusedOnly" type="checkbox"> Only when browser is focused</label>
+        </div>
+      </div>
+
+      <div>
+        <label><strong>Blacklist (one channel per line)</strong></label>
+        <textarea id="blacklistBox" class="miniTA"></textarea>
+        <div class="btns">
+          <button id="quickSave" class="primary">Save Quick Settings</button>
+          <button id="quickApplyReload">Save Quick Settings &amp; Reload</button>
+        </div>
+        <div id="quickStatus" class="status"></div>
+        <p class="small">Priority stays in its own ordered editor below. Follows stay in the follows box.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="grid">
       <div>
         <label><strong>Config (JSON)</strong></label>
         <textarea id="cfg"></textarea>
