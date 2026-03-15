@@ -193,9 +193,25 @@ export async function ensureOpen(channel, via = "manager") {
     }
   }
 
-  const existing = await findExistingChannelTab(ch);
+    const existing = await findExistingChannelTab(ch);
   if (existing?.id) {
-    log("ensure_open_found_existing", { ch, tabId: existing.id });
+    ownedTabs[String(existing.id)] = true;
+    managedChannels[ch] = existing.id;
+    await saveManagedState();
+
+    log("ensure_open_adopt_existing", { ch, tabId: existing.id, via });
+
+    if (globalThis.TTM_STAB?.setTab) globalThis.TTM_STAB.setTab(ch, existing.id, `${via}:adopted`);
+    if (globalThis.TTM_STAB?.markAction) globalThis.TTM_STAB.markAction(ch);
+
+    if (globalThis.TTM?.scheduleTabRepokes) {
+      globalThis.TTM.scheduleTabRepokes(existing.id);
+    }
+
+    if (globalThis.TTM?.noteManagedOpen) {
+      globalThis.TTM.noteManagedOpen(ch);
+    }
+
     return existing.id;
   }
 

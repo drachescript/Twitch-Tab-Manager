@@ -332,6 +332,13 @@ Full privacy policy:
 
 All notable changes use `DD/MM/YYYY`.
 
+### [1.0.8.1] — 15/03/2026
+
+* Added notificiations if a new version was installed
+* Fixed a bug related to not opening a stream or closing it for no reason
+* if you manually open a followed stream it will be added to the extention workflow so it closes after raid/offline
+* Small other fixes to make the extention more reliable
+
 ### [1.0.8] — 14/03/2026
 
 * More safety around offline closing
