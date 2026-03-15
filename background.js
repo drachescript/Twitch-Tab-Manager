@@ -56,6 +56,8 @@ const OFFLINE_CLOSE_DELAY_MS = 45000;
 const SOFT_WAKE_MIN_STUCK_MS = 12000;
 const SOFT_WAKE_COOLDOWN_MS = 60000;
 const SOFT_WAKE_TAB_MS = 900;
+const missingLiveSinceByChannel = new Map();
+const LIVE_MISS_CLOSE_DELAY_MS = 120000;
 
 function parseBool(value, fallback) {
   if (value === true || value === false) return value;
@@ -115,7 +117,43 @@ function redactForDiag(settings = {}) {
     followUnion_count: followUnion.length
   };
 }
+function getVersionText() {
+  try {
+    return chrome.runtime.getManifest()?.version || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
 
+async function maybeShowUpdateNotification(details) {
+  if (!details || details.reason !== "update") return;
+
+  const version = getVersionText();
+  const fromVersion = details.previousVersion || "older version";
+
+  try {
+    const bag = await chrome.storage.local.get(["ttm_last_update_notified_version"]);
+    if (bag.ttm_last_update_notified_version === version) return;
+
+    await chrome.notifications.create(`ttm-update-${version}`, {
+      type: "basic",
+      iconUrl: "icons/icon192.png",
+      title: "Twitch Tab Manager updated",
+      message: `Extension got updated to ${version}. Click the extension icon to review what changed.`
+    });
+
+    await chrome.storage.local.set({
+      ttm_last_update_notified_version: version
+    });
+
+    log("update_notification_shown", { version, fromVersion });
+  } catch (e) {
+    log("update_notification_failed", { error: String(e), version, fromVersion });
+  }
+}
+chrome.runtime.onInstalled.addListener((details) => {
+  maybeShowUpdateNotification(details);
+});
 function isChannelUrl(url) {
   try {
     return TWITCH_CHANNEL_RX.test(String(url || ""));
@@ -606,6 +644,11 @@ function scheduleOfflineClose(login) {
     return;
   }
 
+  if (Array.isArray(state.lastLive) && state.lastLive.includes(key)) {
+    log("offline_ignored_still_in_last_live", { login: key });
+    return;
+  }
+
   if (offlineTimers.has(key)) {
     return;
   }
@@ -625,6 +668,14 @@ function scheduleOfflineClose(login) {
 
     if (isInOpenGrace(key)) {
       log("offline_close_cancelled_open_grace", { login: key });
+      return;
+    }
+
+    if (Array.isArray(state.lastLive) && state.lastLive.includes(key)) {
+      log("offline_close_cancelled_still_in_last_live", {
+        login: key,
+        pendingMs: Date.now() - pendingSince
+      });
       return;
     }
 
@@ -656,9 +707,30 @@ function scheduleRaidClose(login) {
   raidTimers.set(key, timer);
   log("raid_close_scheduled", { login: key, delayMs: RAID_CLOSE_DELAY_MS });
 }
+async function closeManagedChannelsThatAreNowBlocked() {
+  const managedChannels = await listManaged();
+  if (!managedChannels.length) return;
 
+  const allowed = new Set(uniqNames(state.settings.followUnion || []));
+  const blacklist = new Set(uniqNames(state.settings.blacklist || []));
+
+  for (const login of managedChannels) {
+    const key = normalizeName(login);
+    if (!key) continue;
+
+    if (blacklist.has(key)) {
+      await closeManagedChannelTab(key, "blacklist", RAID_REOPEN_COOLDOWN_MS);
+      continue;
+    }
+
+    if (!allowed.has(key)) {
+      await closeManagedChannelTab(key, "no_longer_allowed", RAID_REOPEN_COOLDOWN_MS);
+    }
+  }
+}
 async function poll({ force = false } = {}) {
   await loadSettings();
+  await closeManagedChannelsThatAreNowBlocked();
 
   if (!force && state.settings.enabled === false) {
     log("poll_skip", { reason: "disabled" });
@@ -675,23 +747,54 @@ async function poll({ force = false } = {}) {
     log("poll_live_error", String(e));
   }
 
-  liveList = liveList.filter((login) => !isReopenBlocked(login));
+  liveList = liveList.filter((login) => {
+  const key = normalizeName(login);
+  if (!key) return false;
+  if (isReopenBlocked(key)) return false;
+  if (state.settings.blacklist.includes(key)) return false;
+  return true;
+  });
 
   const currentlyOpen = Array.isArray(state.openChannels) ? state.openChannels : [];
 
   if (liveList.length === 0 && currentlyOpen.length > 0 && state.settings.followUnion.length > 0) {
-    log("poll_keep_open", {
-      reason: "transient_empty_live_set",
-      open_count: currentlyOpen.length,
-      configured_count: state.settings.followUnion.length
-    });
-  } else {
-    try {
-      await reconcileTabs(liveList, state.settings);
-    } catch (e) {
-      log("poll_reconcile_error", String(e));
+  log("poll_keep_open", {
+    reason: "transient_empty_live_set",
+    open_count: currentlyOpen.length,
+    configured_count: state.settings.followUnion.length
+  });
+
+  // Even when keeping current managed tabs open during a transient empty live set,
+  // still close channels that are explicitly blocked or no longer allowed.
+  await closeManagedChannelsThatAreNowBlocked();
+} else {
+  try {
+    const now = Date.now();
+    const managedNow = await listManaged();
+    const liveNowSet = new Set(liveList);
+
+    for (const ch of managedNow) {
+      if (liveNowSet.has(ch)) {
+        missingLiveSinceByChannel.delete(ch);
+      } else if (!missingLiveSinceByChannel.has(ch)) {
+        missingLiveSinceByChannel.set(ch, now);
+      }
     }
+
+    const debouncedLiveList = uniqNames([
+      ...liveList,
+      ...managedNow.filter((ch) => {
+        const missingSince = missingLiveSinceByChannel.get(ch);
+        if (!missingSince) return false;
+        return now - missingSince < LIVE_MISS_CLOSE_DELAY_MS;
+      })
+    ]);
+
+    await reconcileTabs(debouncedLiveList, state.settings);
+  } catch (e) {
+    log("poll_reconcile_error", String(e));
   }
+}
 
   try {
     const managed = await listManaged();
@@ -879,6 +982,11 @@ chrome.runtime.onMessage.addListener((msg, sender, send) => {
   }
 
   if (msg?.isOffline) {
+    if (Array.isArray(state.lastLive) && state.lastLive.includes(login)) {
+      log("channel_status_offline_ignored_still_in_last_live", { login });
+      return void send({ ok: true, ignored: "still_in_last_live" });
+    }
+
     scheduleOfflineClose(login);
     return void send({ ok: true, pending: true, delay_ms: OFFLINE_CLOSE_DELAY_MS });
   }
@@ -886,7 +994,7 @@ chrome.runtime.onMessage.addListener((msg, sender, send) => {
   clearOfflineTimer(login);
   clearRaidTimer(login);
   return void send({ ok: true, live: true });
-}
+  }
 
     if (kind === "raid_detected") {
       const login = normalizeName(msg?.login);
