@@ -1,7 +1,6 @@
 import { state, saveSettings, armAlarm, log, diagnose } from "./bg.core.js";
 import { ensureAlarm, setEnabled, normalizeType } from "./bg.compat.js";
-import { reconcileTabs, listManaged, ensureClosed } from "./bg.tabs.js";
-import "./bg.live.js";
+import { reconcileTabs, listManaged, ensureClosed, adoptOpenTabs } from "./bg.tabs.js";import "./bg.live.js";
 import "./bg.stability.js";
 
 (() => {
@@ -170,7 +169,15 @@ function channelFromUrl(url) {
     return "";
   }
 }
-
+async function recordPollMeta(status, extra = {}) {
+  try {
+    await chrome.storage.local.set({
+      ttm_last_poll_at: Date.now(),
+      ttm_last_poll_status: status,
+      ...extra
+    });
+  } catch {}
+}
 function rememberPlayerStatus(tabId, status) {
   const prev = playerStatusByTab.get(tabId) || {};
   playerStatusByTab.set(tabId, {
@@ -799,6 +806,11 @@ async function poll({ force = false } = {}) {
   try {
     const managed = await listManaged();
     state.lastLive = liveList;
+
+  await recordPollMeta("ok", {
+  ttm_last_poll_live_count: Array.isArray(liveList) ? liveList.length : 0,
+  ttm_last_poll_error: ""
+});
     state.openChannels = managed;
 
     log("poll_done", {
@@ -813,10 +825,14 @@ async function poll({ force = false } = {}) {
       live_count: liveList.length,
       open_count: managed.length
     };
+
   } catch (e) {
-    log("poll_list_error", String(e));
-    return { ok: false, error: String(e) };
-  }
+  await recordPollMeta("error", {
+    ttm_last_poll_error: String(e)
+  });
+  log("poll_list_error", String(e));
+  return { ok: false, error: String(e) };
+}
 }
 
 globalThis.TTM.poll = poll;
@@ -848,6 +864,14 @@ async function bootOnce() {
   await loadSettings();
   await ensureAlarm();
 
+  let adoptedInfo = { adopted: 0, total: 0 };
+
+  try {
+    adoptedInfo = await adoptOpenTabs(state.settings.followUnion || []);
+  } catch (e) {
+    log("boot_adopt_error", String(e));
+  }
+
   try {
     await chrome.alarms.create(TTM_REPOKE_ALARM, { periodInMinutes: 1 });
   } catch {}
@@ -855,7 +879,9 @@ async function bootOnce() {
   booted = true;
   log("boot", {
     enabled: state.settings.enabled,
-    everySec: state.settings.check_interval_sec
+    everySec: state.settings.check_interval_sec,
+    adopted_tabs: adoptedInfo.adopted,
+    managed_total: adoptedInfo.total
   });
 }
 
@@ -912,10 +938,23 @@ chrome.runtime.onMessage.addListener((msg, sender, send) => {
     }
 
     if (kind === "reload") {
-      await loadSettings();
-      await ensureAlarm();
-      return void send({ ok: true, settings: redactForDiag(state.settings) });
-    }
+  await loadSettings();
+  await ensureAlarm();
+
+  let adoptedInfo = { adopted: 0, total: 0 };
+  try {
+    adoptedInfo = await adoptOpenTabs(state.settings.followUnion || []);
+  } catch (e) {
+    log("reload_adopt_error", String(e));
+  }
+
+  return void send({
+    ok: true,
+    settings: redactForDiag(state.settings),
+    adopted_tabs: adoptedInfo.adopted,
+    managed_total: adoptedInfo.total
+  });
+  }
 
     if (kind === "force") {
       log("poll_start", { enabled: state.settings.enabled !== false, force: true });
