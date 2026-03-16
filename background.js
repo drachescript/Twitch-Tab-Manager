@@ -1,7 +1,6 @@
 import { state, saveSettings, armAlarm, log, diagnose } from "./bg.core.js";
 import { ensureAlarm, setEnabled, normalizeType } from "./bg.compat.js";
-import { reconcileTabs, listManaged, ensureClosed } from "./bg.tabs.js";
-import "./bg.live.js";
+import { reconcileTabs, listManaged, ensureClosed, adoptOpenTabs } from "./bg.tabs.js";import "./bg.live.js";
 import "./bg.stability.js";
 
 (() => {
@@ -41,7 +40,7 @@ const REPOKE_DELAYS_MS = [1500, 4500, 9000];
 
 const OPEN_GRACE_MS = 20000;
 const REOPEN_COOLDOWN_MS = 90000;
-const RAID_CLOSE_DELAY_MS = 3 * 60 * 1000;
+const RAID_CLOSE_DELAY_MS = 90 * 1000;
 const RAID_REOPEN_COOLDOWN_MS = 5 * 60 * 1000;
 
 const playerStatusByTab = new Map();
@@ -170,7 +169,20 @@ function channelFromUrl(url) {
     return "";
   }
 }
-
+function loginFromSenderOrMessage(sender, msg) {
+  const fromTab = channelFromUrl(sender?.tab?.url || sender?.tab?.pendingUrl || "");
+  if (fromTab) return fromTab;
+  return normalizeName(msg?.login);
+}
+async function recordPollMeta(status, extra = {}) {
+  try {
+    await chrome.storage.local.set({
+      ttm_last_poll_at: Date.now(),
+      ttm_last_poll_status: status,
+      ...extra
+    });
+  } catch {}
+}
 function rememberPlayerStatus(tabId, status) {
   const prev = playerStatusByTab.get(tabId) || {};
   playerStatusByTab.set(tabId, {
@@ -799,6 +811,11 @@ async function poll({ force = false } = {}) {
   try {
     const managed = await listManaged();
     state.lastLive = liveList;
+
+  await recordPollMeta("ok", {
+  ttm_last_poll_live_count: Array.isArray(liveList) ? liveList.length : 0,
+  ttm_last_poll_error: ""
+});
     state.openChannels = managed;
 
     log("poll_done", {
@@ -813,10 +830,14 @@ async function poll({ force = false } = {}) {
       live_count: liveList.length,
       open_count: managed.length
     };
+
   } catch (e) {
-    log("poll_list_error", String(e));
-    return { ok: false, error: String(e) };
-  }
+  await recordPollMeta("error", {
+    ttm_last_poll_error: String(e)
+  });
+  log("poll_list_error", String(e));
+  return { ok: false, error: String(e) };
+}
 }
 
 globalThis.TTM.poll = poll;
@@ -848,6 +869,14 @@ async function bootOnce() {
   await loadSettings();
   await ensureAlarm();
 
+  let adoptedInfo = { adopted: 0, total: 0 };
+
+  try {
+    adoptedInfo = await adoptOpenTabs(state.settings.followUnion || []);
+  } catch (e) {
+    log("boot_adopt_error", String(e));
+  }
+
   try {
     await chrome.alarms.create(TTM_REPOKE_ALARM, { periodInMinutes: 1 });
   } catch {}
@@ -855,7 +884,9 @@ async function bootOnce() {
   booted = true;
   log("boot", {
     enabled: state.settings.enabled,
-    everySec: state.settings.check_interval_sec
+    everySec: state.settings.check_interval_sec,
+    adopted_tabs: adoptedInfo.adopted,
+    managed_total: adoptedInfo.total
   });
 }
 
@@ -912,10 +943,23 @@ chrome.runtime.onMessage.addListener((msg, sender, send) => {
     }
 
     if (kind === "reload") {
-      await loadSettings();
-      await ensureAlarm();
-      return void send({ ok: true, settings: redactForDiag(state.settings) });
-    }
+  await loadSettings();
+  await ensureAlarm();
+
+  let adoptedInfo = { adopted: 0, total: 0 };
+  try {
+    adoptedInfo = await adoptOpenTabs(state.settings.followUnion || []);
+  } catch (e) {
+    log("reload_adopt_error", String(e));
+  }
+
+  return void send({
+    ok: true,
+    settings: redactForDiag(state.settings),
+    adopted_tabs: adoptedInfo.adopted,
+    managed_total: adoptedInfo.total
+  });
+  }
 
     if (kind === "force") {
       log("poll_start", { enabled: state.settings.enabled !== false, force: true });
@@ -976,7 +1020,7 @@ chrome.runtime.onMessage.addListener((msg, sender, send) => {
     }
 
     if (kind === "channel_status") {
-  const login = normalizeName(msg?.login);
+  const login = loginFromSenderOrMessage(sender, msg);
   if (!login) {
     return void send({ ok: false, error: "missing_login" });
   }
@@ -997,14 +1041,14 @@ chrome.runtime.onMessage.addListener((msg, sender, send) => {
   }
 
     if (kind === "raid_detected") {
-      const login = normalizeName(msg?.login);
-      if (!login) {
-        return void send({ ok: false, error: "missing_login" });
-      }
+  const login = loginFromSenderOrMessage(sender, msg);
+  if (!login) {
+    return void send({ ok: false, error: "missing_login" });
+  }
 
-      scheduleRaidClose(login);
-      return void send({ ok: true, scheduled: true, delay_ms: RAID_CLOSE_DELAY_MS });
-    }
+  scheduleRaidClose(login);
+  return void send({ ok: true, scheduled: true, delay_ms: RAID_CLOSE_DELAY_MS });
+  }
 
     return void send({
       ok: false,

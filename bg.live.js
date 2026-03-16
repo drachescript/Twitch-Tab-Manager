@@ -89,7 +89,8 @@ async function probeChannelPagesLive(cfg, need) {
 
   const concurrency = 8;              // parallel fetches
   const hardCap = Math.min(60, ordered.length); // never check more than 60 per poll
-  const target = Math.max(1, Math.min(need || 4, hardCap));
+  const targetNeed = Math.max(1, Number(need || 4) || 4);
+  const target = Math.max(1, Math.min(targetNeed, hardCap));
   
   log('probe_check', `Target: ${target}, Hard cap: ${hardCap}, Concurrency: ${concurrency}`);
   const live = [];
@@ -345,50 +346,59 @@ L.getLiveNowByConfigSafe = async function (cfg) {
       }
       log('live_check', 'HTML following page returned no results');
     }
-        if (followCounts.follows > 0 && cfg?.client_id && cfg?.access_token) {
-      log("live_check", "Trying Helix method");
-      const viaHelix = await helixGetLiveLogins(cfg);
-      if (viaHelix.length > 0) {
-        log("live_found", `Found ${viaHelix.length} live channels via Helix`);
-        return new Set(viaHelix);
-      }
-      log("live_check", "Helix method returned no results");
-    }
-    // Try oauth token auth methods
-    const tok = await getWebOAuthTokenFromConfig(cfg);
-    if (tok) {
-      log('live_check', 'Trying GQL method');
-      const viaGql = await gqlFollowingLiveLoginsWithToken(tok);
-      if (viaGql.length > 0) {
-        log('live_found', `Found ${viaGql.length} live channels via GQL`);
-        return new Set(viaGql);
-      }
-      log('live_check', 'GQL method returned no results');
-    }
+    const capNum = Math.max(1, Number(cfg?.max_tabs || 4) || 4);
+  const found = new Set();
 
-    // Only try probe if we have channels configured
-    if (followCounts.follows > 0 || followCounts.priority > 0) {
-      const cap = Number.isFinite(cfg?.max_tabs) ? cfg.max_tabs : 4;
-      log('live_check', `Trying probe method (cap: ${cap})`);
-      const viaProbe = await probeChannelPagesLive(cfg, cap);
-      if (viaProbe.length > 0) {
-        log('live_found', `Found ${viaProbe.length} live channels via probe`);
-        return new Set(viaProbe);
-      }
-      log('live_check', 'Probe method returned no results');
+  function addFound(list, source) {
+    let added = 0;
+    for (const login of (list || [])) {
+      const key = norm(login);
+      if (!key) continue;
+      if (Array.isArray(cfg?.blacklist) && cfg.blacklist.includes(key)) continue;
+      if (found.has(key)) continue;
+      found.add(key);
+      added += 1;
+      if (found.size >= capNum) break;
     }
+    log("live_merge", { source, added, total: found.size, target: capNum });
+  }
 
-    // Try HTML scraping as final fallback
-    log('live_check', 'Trying HTML method');
+  if (followCounts.follows > 0 && cfg?.client_id && cfg?.access_token) {
+    log("live_check", "Trying Helix method");
+    const viaHelix = await helixGetLiveLogins(cfg);
+    if (viaHelix.length > 0) addFound(viaHelix, "helix");
+    else log("live_check", "Helix method returned no results");
+  }
+
+  const tok = await getWebOAuthTokenFromConfig(cfg);
+  if (found.size < capNum && tok) {
+    log("live_check", "Trying GQL method");
+    const viaGql = await gqlFollowingLiveLoginsWithToken(tok);
+    if (viaGql.length > 0) addFound(viaGql, "gql");
+    else log("live_check", "GQL method returned no results");
+  }
+
+  if (found.size < capNum && (followCounts.follows > 0 || followCounts.priority > 0)) {
+    log("live_check", `Trying probe method (cap: ${capNum})`);
+    const viaProbe = await probeChannelPagesLive(cfg, capNum);
+    if (viaProbe.length > 0) addFound(viaProbe, "probe");
+    else log("live_check", "Probe method returned no results");
+  }
+
+  if (found.size < capNum) {
+    log("live_check", "Trying HTML method");
     const viaHtml = await htmlFetchFollowing();
-    if (viaHtml.length > 0) {
-      log('live_found', `Found ${viaHtml.length} live channels via HTML`);
-      return new Set(viaHtml);
-    }
-    log('live_check', 'HTML method returned no results');
+    if (viaHtml.length > 0) addFound(viaHtml, "html");
+    else log("live_check", "HTML method returned no results");
+  }
 
-    log('live_check', 'All detection methods failed');
-    return new Set();
+  if (found.size > 0) {
+    log("live_found", `Found ${found.size} live channels after merged checks`);
+    return found;
+  }
+
+  log("live_check", "All detection methods failed");
+  return new Set();
   } catch (e) {
     log('live_error', String(e));
     return new Set();

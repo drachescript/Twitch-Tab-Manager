@@ -2,9 +2,12 @@
   if (window.__TTM_STATUS_LOADED__) return;
   window.__TTM_STATUS_LOADED__ = true;
 
-  const login = location.pathname.replace(/^\/+/, "").split("/")[0]?.toLowerCase() || "";
   const startedAt = Date.now();
   const STARTUP_OFFLINE_GRACE_MS = 12000;
+
+  function currentLogin() {
+    return location.pathname.replace(/^\/+/, "").split("/")[0]?.toLowerCase() || "";
+  }
 
   function hasOfflineText(node) {
     if (!node) return false;
@@ -38,7 +41,9 @@
       value.includes("being raided by") ||
       value.includes("join raid") ||
       value.includes("leave raid") ||
-      value.includes("starting raid")
+      value.includes("starting raid") ||
+      value.includes("you are being raided") ||
+      value.includes("raiding")
     );
   }
 
@@ -70,14 +75,27 @@
 
   let lastOffline = null;
   let raidSent = false;
+  let lastLogin = currentLogin();
 
   function send(type, payload) {
+    const login = currentLogin();
+    if (!login) return;
+
     try {
       chrome.runtime.sendMessage({ type, login, ...(payload || {}) }, () => {});
     } catch {}
   }
 
   function check() {
+    const login = currentLogin();
+    if (!login) return;
+
+    if (login !== lastLogin) {
+      lastLogin = login;
+      lastOffline = null;
+      raidSent = false;
+    }
+
     const offline = isOfflineNow();
     const withinStartupGrace = Date.now() - startedAt < STARTUP_OFFLINE_GRACE_MS;
 

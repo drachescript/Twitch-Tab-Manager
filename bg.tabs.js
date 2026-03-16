@@ -175,7 +175,59 @@ async function closeWorstManagedFor(candidateChannel, openSet, priorityMap) {
   await ensureClosed(worstOpen);
   return worstOpen;
 }
+export async function adoptOpenTabs(allowedChannels = []) {
+  await loadManagedState();
+  await rehydrateManagedFromReality();
 
+  const allowed = new Set((allowedChannels || []).map(norm).filter(Boolean));
+  if (!allowed.size) return { adopted: 0, total: 0 };
+
+  let adopted = 0;
+
+  try {
+    const tabs = await chrome.tabs.query({
+      url: ["*://www.twitch.tv/*", "*://twitch.tv/*"]
+    });
+
+    for (const tab of tabs) {
+      const ch = chanFromUrl(tab.url || tab.pendingUrl || "");
+      if (!ch) continue;
+      if (!allowed.has(ch)) continue;
+      if (!tab.id) continue;
+
+      const existingTabId = managedChannels[ch];
+      if (existingTabId === tab.id && ownedTabs[String(tab.id)]) {
+        continue;
+      }
+
+      managedChannels[ch] = tab.id;
+      ownedTabs[String(tab.id)] = true;
+      adopted += 1;
+
+      if (globalThis.TTM_STAB?.setTab) {
+        globalThis.TTM_STAB.setTab(ch, tab.id, "boot:adopted");
+      }
+
+      if (globalThis.TTM_STAB?.markAction) {
+        globalThis.TTM_STAB.markAction(ch);
+      }
+
+      if (globalThis.TTM?.scheduleTabRepokes) {
+        globalThis.TTM.scheduleTabRepokes(tab.id);
+      }
+
+      if (globalThis.TTM?.noteManagedOpen) {
+        globalThis.TTM.noteManagedOpen(ch);
+      }
+    }
+
+    await saveManagedState();
+  } catch (e) {
+    log("adopt_open_tabs_error", { error: String(e) });
+  }
+
+  return { adopted, total: Object.keys(managedChannels).length };
+}
 export async function ensureOpen(channel, via = "manager") {
   const ch = norm(channel);
   if (!ch) return null;

@@ -5,202 +5,515 @@
   <title>Twitch Tab Manager — Options</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    :root { color-scheme: dark; }
-    html, body { background:#0b0f15; color:#e5e7eb; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; margin:0; }
-    .container { max-width:1000px; margin:0 auto; padding:20px; }
-    h1 { font-size:22px; margin:0 0 12px; color:#f3f4f6; }
-    h2,h3,h4 { color:#f3f4f6; margin:16px 0 8px; }
-    a { color:#a78bfa; text-decoration:none; } a:hover { text-decoration:underline; }
-    .tabs { display:flex; gap:12px; border-bottom:1px solid #1f2937; margin-bottom:16px; }
-    .tab { padding:10px 12px; border:1px solid #1f2937; border-bottom:none; border-radius:8px 8px 0 0; background:#0f172a; color:#e5e7eb; cursor:pointer; }
-    .tab.active { background:#111827; font-weight:600; color:#fff; }
-    .panel { display:none; } .panel.active { display:block; }
-    .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
-    textarea { width:100%; min-height:280px; box-sizing:border-box; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:13px; padding:10px; border:1px solid #1f2937; border-radius:8px; background:#0f172a; color:#e5e7eb; }
-    .btns { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
-    button, select, input { padding:8px 12px; border:1px solid #1f2937; border-radius:8px; background:#1f2937; color:#e5e7eb; }
-    button.primary { background:#9146FF; color:#fff; }
-    button:hover { filter:brightness(1.08); }
-    .note { font-size:12px; color:#9ca3af; margin:6px 0 0; }
-    .status { font-size:12px; margin-top:6px; }
-    .ok { color:#22c55e; } .err { color:#ef4444; }
-    .small { font-size:12px; color:#9ca3af; }
-    .help { line-height:1.55; }
-    pre,code { background:#111827; border:1px solid #1f2937; border-radius:8px; padding:8px; display:block; overflow:auto; color:#e5e7eb; }
-    code.inline { display:inline; padding:2px 6px; border-radius:6px; }
-    .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-    .two { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-    @media (max-width:900px){ .grid { grid-template-columns:1fr; } .two { grid-template-columns:1fr; } }
-    .miniTA { min-height:140px; }
-  .version-line {
-  margin-top: 4px;
-  margin-bottom: 14px;
-  font-size: 12px;
-  opacity: 0.75;
-}
+    :root {
+      color-scheme: dark;
+      --bg: #0b0f15;
+      --panel: #101722;
+      --panel-2: #0f172a;
+      --panel-3: #0b1220;
+      --border: #1f2937;
+      --border-2: #273449;
+      --text: #e5e7eb;
+      --text-strong: #f8fafc;
+      --muted: #9ca3af;
+      --accent: #9146ff;
+      --accent-2: #a855f7;
+      --ok: #22c55e;
+      --err: #ef4444;
+      --shadow: 0 14px 36px rgba(0, 0, 0, 0.28);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      background:
+        radial-gradient(circle at top, rgba(145, 70, 255, 0.12), transparent 34%),
+        var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }
+
+    body {
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    .page-header {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 16px;
+    }
+
+    h1 {
+      font-size: 26px;
+      line-height: 1.2;
+      margin: 0;
+      color: var(--text-strong);
+    }
+
+    .version-line {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      color: #d8b4fe;
+      background: rgba(145, 70, 255, 0.16);
+      border: 1px solid rgba(145, 70, 255, 0.32);
+    }
+
+    .tabs {
+      display: flex;
+      gap: 10px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 18px;
+      padding-bottom: 10px;
+      flex-wrap: wrap;
+    }
+
+    .tab {
+      padding: 10px 14px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--panel-2);
+      color: var(--text);
+      cursor: pointer;
+      transition: .15s ease;
+      user-select: none;
+    }
+
+    .tab:hover {
+      filter: brightness(1.08);
+      transform: translateY(-1px);
+    }
+
+    .tab.active {
+      background: linear-gradient(180deg, rgba(145, 70, 255, 0.18), rgba(145, 70, 255, 0.1));
+      border-color: rgba(145, 70, 255, 0.35);
+      color: #fff;
+      font-weight: 700;
+    }
+
+    .panel { display: none; }
+    .panel.active { display: block; }
+
+    .stack {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      padding: 16px;
+    }
+
+    .card h2, .card h3, .card h4 {
+      color: var(--text-strong);
+      margin: 0 0 10px;
+    }
+
+    .card h2 { font-size: 20px; }
+    .card h3 { font-size: 18px; }
+    .card h4 { font-size: 15px; }
+
+    .note,
+    .small {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .note { margin: 0; }
+
+    .help {
+      line-height: 1.6;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .two {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .field,
+    label {
+      display: block;
+      color: var(--text);
+    }
+
+    .label-title {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-strong);
+    }
+
+    input,
+    select,
+    button,
+    textarea {
+      font: inherit;
+    }
+
+    input[type="text"],
+    input[type="password"],
+    input[type="number"],
+    select,
+    textarea {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--border-2);
+      border-radius: 10px;
+      background: var(--panel-2);
+      color: var(--text);
+      outline: none;
+      transition: border-color .15s ease, box-shadow .15s ease;
+    }
+
+    input[type="text"]:focus,
+    input[type="password"]:focus,
+    input[type="number"]:focus,
+    select:focus,
+    textarea:focus {
+      border-color: rgba(145, 70, 255, 0.65);
+      box-shadow: 0 0 0 3px rgba(145, 70, 255, 0.14);
+    }
+
+    textarea {
+      min-height: 280px;
+      resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+    }
+
+    .miniTA {
+      min-height: 140px;
+    }
+
+    .btns,
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-top: 10px;
+    }
+
+    button {
+      appearance: none;
+      padding: 9px 14px;
+      border: 1px solid var(--border-2);
+      border-radius: 10px;
+      background: #1b2637;
+      color: var(--text);
+      cursor: pointer;
+      font-weight: 700;
+      transition: .15s ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.08);
+    }
+
+    button.primary {
+      background: linear-gradient(180deg, var(--accent-2), var(--accent));
+      border-color: rgba(145, 70, 255, 0.45);
+      color: #fff;
+    }
+
+    .status {
+      font-size: 12px;
+      margin-top: 8px;
+      min-height: 16px;
+    }
+
+    .ok { color: var(--ok); }
+    .err { color: var(--err); }
+
+    pre, code {
+      background: #111827;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+    }
+
+    pre {
+      padding: 10px;
+      overflow: auto;
+    }
+
+    code.inline {
+      display: inline;
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+
+    .quick-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 16px;
+    }
+
+    .subcard {
+      background: var(--panel-3);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px;
+    }
+
+    .checkbox-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px 16px;
+    }
+
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 20px;
+    }
+
+    .checkbox-row input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--accent);
+    }
+
+    .section-title {
+      margin-bottom: 8px;
+    }
+
+    @media (max-width: 980px) {
+      .grid,
+      .two,
+      .quick-grid,
+      .checkbox-grid {
+        grid-template-columns: 1fr;
+      }
+    }
   </style>
 </head>
 <body>
 <div class="container">
-  <h1>Twitch Tab Manager — Settings</h1>
-  <div id="versionLine" class="version-line">Version: …</div>
+  <header class="page-header">
+    <h1>Twitch Tab Manager — Settings</h1>
+    <div id="versionLine" class="version-line">Version: …</div>
+  </header>
+
   <div class="tabs">
     <div class="tab active" data-tab="settings">Settings</div>
     <div class="tab" data-tab="help">Help</div>
     <div class="tab" data-tab="debug">Debug</div>
   </div>
 
-  <!-- SETTINGS -->
   <section id="panel-settings" class="panel active">
-  <p class="note">These values override the packaged files. Export/Import for backup or migration.</p>
+    <div class="stack">
+      <section class="card">
+        <p class="note">These values override the packaged files. Export and import can be used for backup or migration.</p>
+      </section>
 
-  <section>
-    <h3>Quick Settings</h3>
-    <p class="small">These controls update the same stored config as the JSON box below.</p>
-    <div class="grid">
-      <div>
-        <div class="two">
-          <label><strong>Live Source</strong><br><select id="liveSource">
-            <option value="auto">auto</option>
-            <option value="helix">helix</option>
-            <option value="following_html">following_html</option>
-          </select></label>
-          <label><strong>Check Interval (sec)</strong><br><input id="checkIntervalSec" type="number" min="10" step="1"></label>
-          <label><strong>Max Tabs</strong><br><input id="maxTabs" type="number" min="1" step="1"></label>
-          <label><strong>Enabled</strong><br><select id="enabledSelect">
-            <option value="true">Enabled</option>
-            <option value="false">Disabled</option>
-          </select></label>
+      <section class="card">
+        <h2>Quick Settings</h2>
+        <p class="small">These controls update the same stored config as the JSON editor below.</p>
+
+        <div class="quick-grid">
+          <div class="subcard">
+            <div class="two">
+              <label class="field">
+                <span class="label-title">Live Source</span>
+                <select id="liveSource">
+                  <option value="auto">auto</option>
+                  <option value="helix">helix</option>
+                  <option value="following_html">following_html</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span class="label-title">Check Interval (sec)</span>
+                <input id="checkIntervalSec" type="number" min="10" step="1">
+              </label>
+
+              <label>
+                <strong>Max Tabs</strong><br>
+                <input id="maxTabs" type="number" min="1" step="1">
+                <div class="small" style="margin-top:6px;">More than 8 is not recommended.</div>
+              </label>
+
+              <label class="field">
+                <span class="label-title">Enabled</span>
+                <select id="enabledSelect">
+                  <option value="true">Enabled</option>
+                  <option value="false">Disabled</option>
+                </select>
+              </label>
+            </div>
+
+            <h4 class="section-title" style="margin-top:14px;">Playback</h4>
+            <div class="checkbox-grid">
+              <label class="checkbox-row"><input id="forceUnmute" type="checkbox"> Force unmute</label>
+              <label class="checkbox-row"><input id="unmuteStreams" type="checkbox"> Unmute streams</label>
+              <label class="checkbox-row"><input id="forceResume" type="checkbox"> Force resume</label>
+              <label class="checkbox-row"><input id="autoplayStreams" type="checkbox"> Autoplay streams</label>
+            </div>
+
+            <h4 class="section-title" style="margin-top:14px;">Soft Wake</h4>
+            <div class="checkbox-grid">
+              <label class="checkbox-row"><input id="softWakeTabs" type="checkbox"> Enable soft wake for managed tabs</label>
+              <label class="checkbox-row"><input id="softWakeFocusedOnly" type="checkbox"> Only when browser is focused</label>
+            </div>
+          </div>
+
+          <div class="subcard">
+            <label class="field">
+              <span class="label-title">Blacklist (one channel per line)</span>
+              <textarea id="blacklistBox" class="miniTA"></textarea>
+            </label>
+
+            <div class="btns">
+              <button id="quickSave" class="primary">Save Quick Settings</button>
+              <button id="quickApplyReload">Save Quick Settings &amp; Reload</button>
+            </div>
+
+            <div id="quickStatus" class="status"></div>
+            <p class="small">Priority stays in its own ordered editor below. Follows stay in the follows box.</p>
+          </div>
         </div>
+      </section>
 
-        <h4>Playback</h4>
-        <div class="two">
-          <label><input id="forceUnmute" type="checkbox"> Force unmute</label>
-          <label><input id="unmuteStreams" type="checkbox"> Unmute streams</label>
-          <label><input id="forceResume" type="checkbox"> Force resume</label>
-          <label><input id="autoplayStreams" type="checkbox"> Autoplay streams</label>
+      <section class="card">
+        <div class="grid">
+          <div>
+            <label class="field">
+              <span class="label-title">Config (JSON)</span>
+              <textarea id="cfg"></textarea>
+            </label>
+
+            <div class="btns">
+              <button id="saveCfg" class="primary">Save</button>
+              <button id="applyReload">Apply &amp; Reload</button>
+              <button id="exportCfg">Export</button>
+              <button id="importCfg">Import</button>
+              <button id="resetCfg">Reset to Packaged</button>
+              <button id="refreshCfg">Refresh From Storage</button>
+            </div>
+            <div id="cfgStatus" class="status"></div>
+          </div>
+
+          <div>
+            <label class="field">
+              <span class="label-title">Follows (one <em>username</em> per line)</span>
+              <p class="small">Example: for <code class="inline">twitch.tv/sery_bot</code>, enter <code class="inline">sery_bot</code> in lowercase.</p>
+              <textarea id="fol"></textarea>
+            </label>
+
+            <div class="btns">
+              <button id="saveFol" class="primary">Save</button>
+              <button id="exportFol">Export</button>
+              <button id="importFol">Import</button>
+              <button id="resetFol">Reset to Packaged</button>
+              <button id="refreshFol">Refresh From Storage</button>
+            </div>
+
+            <div class="btns">
+              <select id="fetchMode" title="How to fetch">
+                <option value="active">Open active tab (auto-scroll)</option>
+                <option value="current">Use my current Twitch tab</option>
+              </select>
+              <button id="fetchFollows">Fetch My Follows</button>
+            </div>
+
+            <div id="folStatus" class="status"></div>
+
+            <div class="btns" style="margin-top: 12px;">
+              <button id="forcePoll">Force Poll Now</button>
+              <button id="reloadConfig">Reload Config in Background</button>
+            </div>
+
+            <p class="small">Apply &amp; Reload saves your JSON and asks the background worker to reload immediately.</p>
+          </div>
         </div>
+      </section>
 
-        <h4>Soft Wake</h4>
-        <div class="two">
-          <label><input id="softWakeTabs" type="checkbox"> Enable soft wake for managed tabs</label>
-          <label><input id="softWakeFocusedOnly" type="checkbox"> Only when browser is focused</label>
-        </div>
-      </div>
-
-      <div>
-        <label><strong>Blacklist (one channel per line)</strong></label>
-        <textarea id="blacklistBox" class="miniTA"></textarea>
+      <section class="card">
+        <h3>Priority Channels</h3>
+        <p class="small">One channel per line, lowercase. Ordered from strongest to weakest priority.</p>
+        <textarea id="priorityBox" rows="6" style="width:100%"></textarea>
         <div class="btns">
-          <button id="quickSave" class="primary">Save Quick Settings</button>
-          <button id="quickApplyReload">Save Quick Settings &amp; Reload</button>
+          <button id="prioritySave" class="primary">Save Priority</button>
         </div>
-        <div id="quickStatus" class="status"></div>
-        <p class="small">Priority stays in its own ordered editor below. Follows stay in the follows box.</p>
-      </div>
+      </section>
     </div>
   </section>
 
-  <div class="grid">
-      <div>
-        <label><strong>Config (JSON)</strong></label>
-        <textarea id="cfg"></textarea>
-        <div class="btns">
-          <button id="saveCfg" class="primary">Save</button>
-          <button id="applyReload">Apply &amp; Reload</button>
-          <button id="exportCfg">Export</button>
-          <button id="importCfg">Import</button>
-          <button id="resetCfg">Reset to Packaged</button>
-          <button id="refreshCfg">Refresh From Storage</button>
-        </div>
-        <div id="cfgStatus" class="status"></div>
-      </div>
-
-      <div>
-        <label><strong>Follows (one <em>username</em> per line)</strong></label>
-        <p class="small">Example: for <code class="inline">twitch.tv/sery_bot</code>, enter <code class="inline">sery_bot</code> (lowercase).</p>
-        <textarea id="fol"></textarea>
-        <div class="btns">
-          <button id="saveFol" class="primary">Save</button>
-          <button id="exportFol">Export</button>
-          <button id="importFol">Import</button>
-          <button id="resetFol">Reset to Packaged</button>
-          <button id="refreshFol">Refresh From Storage</button>
-        </div>
-
-        <div class="btns">
-          <select id="fetchMode" title="How to fetch">
-            <option value="active">Open active tab (auto-scroll)</option>
-            <option value="current">Use my current Twitch tab</option>
-          </select>
-          <button id="fetchFollows">Fetch My Follows</button>
-        </div>
-        <div id="folStatus" class="status"></div>
-
-        <div class="btns" style="margin-top:10px;">
-          <button id="forcePoll">Force Poll Now</button>
-          <button id="reloadConfig">Reload Config in Background</button>
-        </div>
-        <p class="small">“Apply &amp; Reload” saves your JSON and asks the background worker to reload immediately.</p>
-      </div>
-    </div>
-
-    <!-- Priority Channels lives ONLY in Settings -->
-    <section>
-      <h3>Priority Channels</h3>
-      <p>One channel per line (lowercase).</p>
-      <textarea id="priorityBox" rows="6" style="width:100%"></textarea>
-      <button id="prioritySave" class="btn">Save Priority</button>
-    </section>
-  </section>
-  <!-- HELP -->
   <section id="panel-help" class="panel">
-    <article class="help">
+    <section class="card help">
       <h2>How to Use</h2>
       <ol>
-        <li>Put each channel <strong>username</strong> on its own line in <strong>Follows</strong> (e.g., <code class="inline">sery_bot</code>).</li>
-        <li>In <strong>Config</strong>, set <code class="inline">client_id</code> and <code class="inline">access_token</code>, or set <code class="inline">"live_source":"following_html"</code> to avoid tokens.</li>
-        <li>Load the extension in <code class="inline">chrome://extensions</code>, toggle <strong>On</strong>, hit <strong>Force Poll</strong>.</li>
+        <li>Put each channel <strong>username</strong> on its own line in <strong>Follows</strong>.</li>
+        <li>In <strong>Config</strong>, set <code class="inline">client_id</code> and <code class="inline">access_token</code>, or use <code class="inline">"live_source":"following_html"</code>.</li>
+        <li>Load the extension in <code class="inline">chrome://extensions</code>, turn it on, then hit <strong>Force Poll</strong>.</li>
       </ol>
 
       <h3>Helix Setup (recommended)</h3>
-      <p>Prefer Helix for the most precise “who is live” checks. If you don’t want tokens, use the HTML fallback.</p>
+      <p>Prefer Helix for the most precise live checks. If you do not want tokens, use the HTML fallback.</p>
       <ol>
-        <li>Create a Twitch app at <a href="https://dev.twitch.tv/console/apps" target="_blank" rel="noopener">https://dev.twitch.tv/console/apps</a>.</li>
-        <li>Use OAuth Redirect <code class="inline">http://localhost</code> (placeholder is fine).</li>
-        <li>Copy your <strong>Client ID</strong> (safe for config), keep your <strong>Client Secret</strong> private.</li>
-        <li>Generate an <strong>App Access Token</strong> (Client Credentials flow) using the snippet generator below.</li>
+        <li>Create a Twitch app at <a href="https://dev.twitch.tv/console/apps" target="_blank" rel="noopener">dev.twitch.tv/console/apps</a>.</li>
+        <li>Use OAuth Redirect <code class="inline">http://localhost</code>.</li>
+        <li>Copy your <strong>Client ID</strong> and keep your <strong>Client Secret</strong> private.</li>
+        <li>Generate an <strong>App Access Token</strong> using the snippet generator below.</li>
       </ol>
 
-      <h3>Token Snippet Generator (fill → copy)</h3>
+      <h3>Token Snippet Generator</h3>
       <div class="two">
         <div>
           <div class="row">
             <label for="cid"><strong>Client ID:</strong></label>
             <input id="cid" type="text" placeholder="YOUR_CLIENT_ID_HERE" style="flex:1;min-width:260px;">
           </div>
+
           <div class="row" style="margin-top:6px;">
             <label for="csecret"><strong>Client Secret:</strong></label>
             <input id="csecret" type="password" placeholder="YOUR_CLIENT_SECRET_HERE" style="flex:1;min-width:260px;">
           </div>
-          <div class="btns" style="margin-top:8px;">
+
+          <div class="btns">
             <button id="btnApplyCIDToCfg">Insert Client ID into Config JSON</button>
           </div>
+
+          <div class="row" style="margin-top:8px;">
+            <label for="tok"><strong>Access Token:</strong></label>
+            <input id="tok" type="text" placeholder="paste token here" style="flex:1;min-width:260px;">
+            <button id="btnApplyToken" class="primary">Insert Token</button>
+          </div>
+
           <p class="small">After you run the command and get <code class="inline">access_token</code>, paste that token into your config JSON.</p>
         </div>
 
-        <div class="row" style="margin-top:8px;">
-          <label for="tok"><strong>Access Token:</strong></label>
-          <input id="tok" type="text" placeholder="paste token here" style="flex:1;min-width:260px;">
-          <button id="btnApplyToken" class="primary">Insert Token</button>
-        </div>
-
         <div>
-          <h4 style="margin:0 0 6px;">PowerShell (Windows)</h4>
+          <h4>PowerShell (Windows)</h4>
           <textarea id="ps1Out" class="miniTA" readonly></textarea>
           <div class="btns"><button id="btnCopyPS1" class="primary">Copy PowerShell</button></div>
 
-          <h4 style="margin:12px 0 6px;">cURL</h4>
+          <h4 style="margin-top:12px;">cURL</h4>
           <textarea id="curlOut" class="miniTA" readonly></textarea>
           <div class="btns"><button id="btnCopyCurl" class="primary">Copy cURL</button></div>
         </div>
@@ -217,29 +530,32 @@
   "unmute_streams": true,
   "max_tabs": 8,
   "blacklist": []
-}
-</code></pre>
+}</code></pre>
 
-      <p class="small">Tokens expire. If live checks start failing (HTTP <code class="inline">401</code>), generate a new token and update <code class="inline">config.json</code>.</p>
-    </article>
+      <p class="small">Tokens expire. If live checks start failing with <code class="inline">401</code>, generate a new token and update your config.</p>
+    </section>
+  </section>
+
+  <section id="panel-debug" class="panel">
+    <section class="card">
+      <h2>Debug</h2>
+      <div class="btns">
+        <button id="dbgRun" class="primary">Run Diagnostics</button>
+        <button id="dbgCopy">Copy Results</button>
+        <button id="dbgClear">Clear Logs</button>
+      </div>
+
+      <p class="small">Use Run Diagnostics while some follows are live. Results include settings, live list, open channels, capacity, and internal logs.</p>
+      <textarea id="dbgOut" class="miniTA" style="min-height:260px" readonly></textarea>
+
+      <h3 style="margin-top:16px;">Open Channel Test</h3>
+      <div class="row">
+        <input id="dbgChannel" type="text" placeholder="channel login (lowercase)" style="flex:1;min-width:260px;">
+        <button id="dbgOpen">Try Open</button>
+      </div>
+    </section>
   </section>
 </div>
-
-<section id="panel-debug" class="panel">
-  <h2>Debug</h2>
-  <div class="btns">
-    <button id="dbgRun" class="primary">Run Diagnostics</button>
-    <button id="dbgCopy">Copy Results</button>
-    <button id="dbgClear">Clear Logs</button>
-  </div>
-  <p class="small">Use “Run Diagnostics” while some follows are live. Results include settings, live list, open channels, capacity, and internal logs.</p>
-  <textarea id="dbgOut" class="miniTA" style="min-height:260px" readonly></textarea>
-  <h3 style="margin-top:16px;">Open Channel Test</h3>
-  <div class="row">
-    <input id="dbgChannel" type="text" placeholder="channel login (lowercase)" style="flex:1;min-width:260px;">
-    <button id="dbgOpen">Try Open</button>
-  </div>
-</section>
 
 <input id="fileCfg" type="file" accept=".json,application/json" style="display:none" />
 <input id="fileFol" type="file" accept=".txt,text/plain" style="display:none" />

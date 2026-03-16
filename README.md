@@ -332,6 +332,19 @@ Full privacy policy:
 
 All notable changes use `DD/MM/YYYY`.
 
+### [1.0.8.6] — 16/03/2026
+* Existing open Twitch tabs now get picked back up after an extension reload or restart
+* fixed an issue with raided or offline channels not getting closed or being closed very late
+* fixed an issue where any value of max tabs wasnt actually used except 4
+
+### [1.0.8.5] — 15/03/2026
+
+* Updated popup UI to look cleaner and show more useful status info
+* Added popup version display, last update version, and last poll time
+* Refreshed the Options page layout to look cleaner and more organized
+* Improved Quick Settings / newer settings presentation in Options
+* Small UI cleanup and fixes
+
 ### [1.0.8.1] — 15/03/2026
 
 * Added notificiations if a new version was installed

@@ -1,22 +1,82 @@
 document.addEventListener("DOMContentLoaded", () => {
-  const elToggle = document.getElementById("toggle") || document.getElementById("toggleManager");
-  const elStatus = document.getElementById("statusText") || document.getElementById("status") || document.getElementById("stateText");
-  const btnPoll = document.getElementById("btnPoll") || document.getElementById("btnForcePoll");
-  const btnReload = document.getElementById("btnReload") || document.getElementById("btnReloadConfig");
-  const btnOptions = document.getElementById("btnOptions") || document.getElementById("btnOpenOptions");
+  const elToggle = document.getElementById("toggleManager");
+  const elStatus = document.getElementById("statusText");
+  const elStateTitle = document.getElementById("stateText");
+  const elVersion = document.getElementById("popupVersion");
+  const elUpdatedVersion = document.getElementById("updatedVersion");
+  const elLastPoll = document.getElementById("lastPoll");
+  const elStatOpen = document.getElementById("statOpen");
+  const elStatLive = document.getElementById("statLive");
+  const elStatMax = document.getElementById("statMax");
+  const elFlash = document.getElementById("popupFlash");
+
+  const btnPoll = document.getElementById("btnPoll");
+  const btnReload = document.getElementById("btnReload");
+  const btnOptions = document.getElementById("btnOptions");
   const btnDiag = document.getElementById("btnDiag");
 
-  function setBusy(busy) {
-    if (elToggle) elToggle.disabled = !!busy;
-    if (btnPoll) btnPoll.disabled = !!busy;
-    if (btnReload) btnReload.disabled = !!busy;
-    if (btnDiag) btnDiag.disabled = !!busy;
+  let busy = false;
+
+  function setBusy(nextBusy) {
+    busy = !!nextBusy;
+
+    elToggle.disabled = busy;
+    btnPoll.disabled = busy;
+    btnReload.disabled = busy;
+    btnOptions.disabled = busy;
+    btnDiag.disabled = busy;
+
+    document.body.classList.toggle("is-busy", busy);
+  }
+
+  function flash(message, kind = "info") {
+    elFlash.textContent = message || "";
+    elFlash.className = `flash ${kind}`;
+  }
+
+  function setVersionText() {
+    try {
+      const version = chrome.runtime.getManifest()?.version || "unknown";
+      elVersion.textContent = `v${version}`;
+    } catch {
+      elVersion.textContent = "v?";
+    }
+  }
+
+  function formatPollTime(ts) {
+    if (!ts) return "—";
+
+    const date = new Date(ts);
+    if (Number.isNaN(date.getTime())) return "—";
+
+    const now = Date.now();
+    const diffMs = Math.max(0, now - date.getTime());
+    const diffSec = Math.floor(diffMs / 1000);
+
+    let ago = "";
+    if (diffSec < 10) ago = "just now";
+    else if (diffSec < 60) ago = `${diffSec}s ago`;
+    else if (diffSec < 3600) ago = `${Math.floor(diffSec / 60)}m ago`;
+    else ago = `${Math.floor(diffSec / 3600)}h ago`;
+
+    return `${date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} (${ago})`;
   }
 
   function setStatusText(enabled) {
-    if (!elStatus) return;
     const on = enabled !== false;
-    elStatus.innerHTML = `Extension is <strong>${on ? "on" : "off"}</strong>`;
+
+    elStateTitle.textContent = on ? "Enabled" : "Disabled";
+    elStateTitle.className = on ? "state-title is-on" : "state-title is-off";
+
+    elStatus.textContent = on
+      ? "Watching your configured follows and priority channels."
+      : "Manager is currently disabled.";
+  }
+
+  function setStats({ openCount, liveCount, maxTabs }) {
+    elStatOpen.textContent = Number.isFinite(openCount) ? String(openCount) : "—";
+    elStatLive.textContent = Number.isFinite(liveCount) ? String(liveCount) : "—";
+    elStatMax.textContent = Number.isFinite(maxTabs) ? String(maxTabs) : "—";
   }
 
   function send(type, payload) {
@@ -35,86 +95,172 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  async function readEnabledFallback() {
+  async function readStorageFallback() {
     try {
-      const got = await chrome.storage.local.get(["settings", "config", "enabled"]);
-      const fromSettings = got?.settings?.enabled;
-      const fromConfig = got?.config?.enabled;
+      return await chrome.storage.local.get([
+        "settings",
+        "config",
+        "enabled",
+        "max_tabs",
+        "ttm_last_update_notified_version",
+        "ttm_last_poll_at",
+        "ttm_last_poll_status"
+      ]);
+    } catch {
+      return {};
+    }
+  }
 
-      if (fromSettings === true || fromSettings === false) return fromSettings;
-      if (fromConfig === true || fromConfig === false) return fromConfig;
-      if (got?.enabled === true || got?.enabled === false) return got.enabled;
-    } catch {}
-    return true;
+  async function refreshMeta() {
+    const bag = await readStorageFallback();
+
+    const updatedVersion =
+      bag.ttm_last_update_notified_version ||
+      chrome.runtime.getManifest()?.version ||
+      "unknown";
+
+    elUpdatedVersion.textContent = updatedVersion;
+    elLastPoll.textContent = formatPollTime(bag.ttm_last_poll_at);
   }
 
   async function refreshUI() {
     setBusy(true);
+    flash("");
 
-    const resp = (await send("ttm/ping")) || (await send("PING")) || (await send("TTM_STATUS"));
-    let enabled = resp && typeof resp.enabled === "boolean" ? resp.enabled : await readEnabledFallback();
+    const ping =
+      (await send("ttm/ping")) ||
+      (await send("PING")) ||
+      (await send("TTM_STATUS"));
 
-    if (elToggle) elToggle.checked = enabled !== false;
+    const enabled =
+      ping && typeof ping.enabled === "boolean"
+        ? ping.enabled
+        : (await readStorageFallback())?.settings?.enabled ??
+          (await readStorageFallback())?.config?.enabled ??
+          (await readStorageFallback())?.enabled ??
+          true;
+
+    elToggle.checked = enabled !== false;
     setStatusText(enabled);
+
+    let diag = null;
+    try {
+      diag =
+        (await send("ttm/diagnose")) ||
+        (await send("DIAGNOSE")) ||
+        (await send("TTM_DIAG"));
+    } catch {}
+
+    const bag = await readStorageFallback();
+
+    const openCount =
+      Number.isFinite(diag?.open_count) ? diag.open_count :
+      Number.isFinite(diag?.managed_count) ? diag.managed_count :
+      null;
+
+    const liveCount =
+      Number.isFinite(diag?.live_count) ? diag.live_count :
+      null;
+
+    const maxTabs =
+      Number.isFinite(diag?.max_tabs) ? diag.max_tabs :
+      Number(bag?.settings?.max_tabs) ||
+      Number(bag?.config?.max_tabs) ||
+      Number(bag?.max_tabs) ||
+      null;
+
+    setStats({ openCount, liveCount, maxTabs });
+    await refreshMeta();
 
     setBusy(false);
   }
 
   async function onToggleChanged() {
-    if (!elToggle) return;
+    if (busy) return;
+
     setBusy(true);
+    flash("");
 
     const enabled = !!elToggle.checked;
     const resp = await send("ttm/enable", { enabled });
 
     if (!resp?.ok) {
       elToggle.checked = !enabled;
+      flash(resp?.error || "Could not change manager state.", "error");
+    } else {
+      flash(enabled ? "Manager enabled." : "Manager disabled.", "ok");
     }
 
     await refreshUI();
     setBusy(false);
   }
 
-  if (elToggle) elToggle.addEventListener("change", onToggleChanged);
+  elToggle.addEventListener("change", onToggleChanged);
 
-  btnPoll?.addEventListener("click", async () => {
+  btnPoll.addEventListener("click", async () => {
+    if (busy) return;
     setBusy(true);
-    await send("ttm/force_poll");
+    flash("");
+
+    const resp = await send("ttm/force_poll");
+    if (resp?.ok) {
+      flash("Force poll sent.", "ok");
+    } else {
+      flash(resp?.error || "Force poll failed.", "error");
+    }
+
     await refreshUI();
     setBusy(false);
   });
 
-  btnReload?.addEventListener("click", async () => {
+  btnReload.addEventListener("click", async () => {
+    if (busy) return;
     setBusy(true);
-    await send("ttm/reload_config");
+    flash("");
+
+    const resp = await send("ttm/reload_config");
+    if (resp?.ok) {
+      flash("Config reloaded.", "ok");
+    } else {
+      flash(resp?.error || "Reload failed.", "error");
+    }
+
     await refreshUI();
     setBusy(false);
   });
 
-  btnOptions?.addEventListener("click", () => {
+  btnOptions.addEventListener("click", () => {
     try {
       chrome.runtime.openOptionsPage();
     } catch {}
   });
 
-  btnDiag?.addEventListener("click", async () => {
+  btnDiag.addEventListener("click", async () => {
+    if (busy) return;
     setBusy(true);
-    const diag = await send("ttm/diagnose");
+    flash("");
+
+    const diag =
+      (await send("ttm/diagnose")) ||
+      (await send("DIAGNOSE")) ||
+      (await send("TTM_DIAG"));
+
     setBusy(false);
 
     if (!diag) {
-      alert("Diagnostics failed.");
+      flash("Diagnostics failed.", "error");
       return;
     }
 
     const shortText = JSON.stringify(diag, null, 2);
     try {
       await navigator.clipboard.writeText(shortText);
-      alert("Diagnostics copied to clipboard.");
+      flash("Diagnostics copied to clipboard.", "ok");
     } catch {
       alert(shortText);
     }
   });
 
+  setVersionText();
   refreshUI();
 });
