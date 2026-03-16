@@ -44,5 +44,4 @@ REM Clean up stage folder
 if exist "%STAGE%" rmdir /s /q "%STAGE%"
 
 echo Done: %OUT%
-pause
 endlocal

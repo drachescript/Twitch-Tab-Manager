@@ -332,8 +332,10 @@ Full privacy policy:
 
 All notable changes use `DD/MM/YYYY`.
 
-### [1.0.8.6] — 15/03/2026
+### [1.0.8.6] — 16/03/2026
 * Existing open Twitch tabs now get picked back up after an extension reload or restart
+* fixed an issue with raided or offline channels not getting closed or being closed very late
+* fixed an issue where any value of max tabs wasnt actually used except 4
 
 ### [1.0.8.5] — 15/03/2026
 

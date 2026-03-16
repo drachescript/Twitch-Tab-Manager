@@ -40,7 +40,7 @@ const REPOKE_DELAYS_MS = [1500, 4500, 9000];
 
 const OPEN_GRACE_MS = 20000;
 const REOPEN_COOLDOWN_MS = 90000;
-const RAID_CLOSE_DELAY_MS = 3 * 60 * 1000;
+const RAID_CLOSE_DELAY_MS = 90 * 1000;
 const RAID_REOPEN_COOLDOWN_MS = 5 * 60 * 1000;
 
 const playerStatusByTab = new Map();
@@ -168,6 +168,11 @@ function channelFromUrl(url) {
   } catch {
     return "";
   }
+}
+function loginFromSenderOrMessage(sender, msg) {
+  const fromTab = channelFromUrl(sender?.tab?.url || sender?.tab?.pendingUrl || "");
+  if (fromTab) return fromTab;
+  return normalizeName(msg?.login);
 }
 async function recordPollMeta(status, extra = {}) {
   try {
@@ -1015,7 +1020,7 @@ chrome.runtime.onMessage.addListener((msg, sender, send) => {
     }
 
     if (kind === "channel_status") {
-  const login = normalizeName(msg?.login);
+  const login = loginFromSenderOrMessage(sender, msg);
   if (!login) {
     return void send({ ok: false, error: "missing_login" });
   }
@@ -1036,14 +1041,14 @@ chrome.runtime.onMessage.addListener((msg, sender, send) => {
   }
 
     if (kind === "raid_detected") {
-      const login = normalizeName(msg?.login);
-      if (!login) {
-        return void send({ ok: false, error: "missing_login" });
-      }
+  const login = loginFromSenderOrMessage(sender, msg);
+  if (!login) {
+    return void send({ ok: false, error: "missing_login" });
+  }
 
-      scheduleRaidClose(login);
-      return void send({ ok: true, scheduled: true, delay_ms: RAID_CLOSE_DELAY_MS });
-    }
+  scheduleRaidClose(login);
+  return void send({ ok: true, scheduled: true, delay_ms: RAID_CLOSE_DELAY_MS });
+  }
 
     return void send({
       ok: false,
