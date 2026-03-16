@@ -336,6 +336,7 @@ All notable changes use `DD/MM/YYYY`.
 * Existing open Twitch tabs now get picked back up after an extension reload or restart
 * fixed an issue with raided or offline channels not getting closed or being closed very late
 * fixed an issue where any value of max tabs wasnt actually used except 4
+* potentionally fixed an issue with offline or raided that arent followed wont be closed
 
 ### [1.0.8.5] — 15/03/2026
 

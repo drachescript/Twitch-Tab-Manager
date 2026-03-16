@@ -152,6 +152,9 @@ async function maybeShowUpdateNotification(details) {
 }
 chrome.runtime.onInstalled.addListener((details) => {
   maybeShowUpdateNotification(details);
+
+  booted = false;
+  bootOnce().catch((e) => log("boot_err", String(e)));
 });
 function isChannelUrl(url) {
   try {
@@ -736,9 +739,35 @@ async function closeManagedChannelsThatAreNowBlocked() {
     }
 
     if (!allowed.has(key)) {
-      await closeManagedChannelTab(key, "no_longer_allowed", RAID_REOPEN_COOLDOWN_MS);
+      await closeManagedChannelTab(key, "not_followed_or_priority", RAID_REOPEN_COOLDOWN_MS);
     }
   }
+}
+async function closeSenderTabIfNowUnwanted(sender, reason = "drifted_unwanted") {
+  const tabId = sender?.tab?.id;
+  const currentLogin = channelFromUrl(sender?.tab?.url || sender?.tab?.pendingUrl || "");
+  if (!tabId || !currentLogin) return false;
+
+  const allowed = new Set(uniqNames(state.settings.followUnion || []));
+  const blacklist = new Set(uniqNames(state.settings.blacklist || []));
+
+  if (blacklist.has(currentLogin) || !allowed.has(currentLogin)) {
+    try {
+      await chrome.tabs.remove(tabId);
+      noteManagedClosed(currentLogin, RAID_REOPEN_COOLDOWN_MS);
+      log("closed_sender_tab_now_unwanted", { tabId, login: currentLogin, reason });
+      return true;
+    } catch (e) {
+      log("close_sender_tab_now_unwanted_error", {
+        tabId,
+        login: currentLogin,
+        reason,
+        error: String(e)
+      });
+    }
+  }
+
+  return false;
 }
 async function poll({ force = false } = {}) {
   await loadSettings();
@@ -803,6 +832,7 @@ async function poll({ force = false } = {}) {
     ]);
 
     await reconcileTabs(debouncedLiveList, state.settings);
+    await closeManagedChannelsThatAreNowBlocked();
   } catch (e) {
     log("poll_reconcile_error", String(e));
   }
@@ -890,11 +920,6 @@ async function bootOnce() {
   });
 }
 
-chrome.runtime.onInstalled.addListener(() => {
-  booted = false;
-  bootOnce().catch((e) => log("boot_err", String(e)));
-});
-
 chrome.runtime.onStartup?.addListener(() => {
   booted = false;
   bootOnce().catch((e) => log("boot_err", String(e)));
@@ -942,7 +967,7 @@ chrome.runtime.onMessage.addListener((msg, sender, send) => {
       return void send({ ok: true, enabled });
     }
 
-    if (kind === "reload") {
+if (kind === "reload") {
   await loadSettings();
   await ensureAlarm();
 
@@ -959,70 +984,75 @@ chrome.runtime.onMessage.addListener((msg, sender, send) => {
     adopted_tabs: adoptedInfo.adopted,
     managed_total: adoptedInfo.total
   });
+}
+
+if (kind === "force") {
+  log("poll_start", { enabled: state.settings.enabled !== false, force: true });
+  const result = await poll({ force: true });
+  return void send(result);
+}
+
+if (kind === "diag" || kind === "diagnose") {
+  return void send(await diagnose());
+}
+
+if (kind === "fetch_follows") {
+  return void send(await fetchMyFollows(msg?.mode || "active"));
+}
+
+if (kind === "get_logs") {
+  return void send({
+    ok: true,
+    logs: Array.isArray(state.logs) ? state.logs.slice(-200) : []
+  });
+}
+
+if (kind === "clear_logs") {
+  state.logs = [];
+  await chrome.storage.local.remove("ttm_logs_v1");
+  return void send({ ok: true });
+}
+
+if (kind === "ttm_player_status") {
+  const tabId = sender?.tab?.id;
+  if (tabId != null) {
+    const prev = getPlayerStatus(tabId);
+    const wasBad = !!(prev && prev.hasVideo && !prev.adPlaying && (prev.paused || prev.muted));
+
+    const next = {
+      login: normalizeName(msg?.login),
+      hasVideo: !!msg?.hasVideo,
+      paused: !!msg?.paused,
+      muted: !!msg?.muted,
+      volume: msg?.volume ?? null,
+      adPlaying: !!msg?.adPlaying,
+      visible: !!msg?.visible,
+      focused: !!msg?.focused
+    };
+
+    const isBad = !!(next.hasVideo && !next.adPlaying && (next.paused || next.muted));
+
+    if (isBad) {
+      next.firstSeenBadAt = wasBad && prev?.firstSeenBadAt ? prev.firstSeenBadAt : Date.now();
+    } else {
+      next.firstSeenBadAt = 0;
+    }
+
+    rememberPlayerStatus(tabId, next);
   }
 
-    if (kind === "force") {
-      log("poll_start", { enabled: state.settings.enabled !== false, force: true });
-      const result = await poll({ force: true });
-      return void send(result);
-    }
+  return void send({ ok: true });
+}
 
-    if (kind === "diag" || kind === "diagnose") {
-      return void send(await diagnose());
-    }
-
-    if (kind === "fetch_follows") {
-      return void send(await fetchMyFollows(msg?.mode || "active"));
-    }
-
-    if (kind === "get_logs") {
-      return void send({
-        ok: true,
-        logs: Array.isArray(state.logs) ? state.logs.slice(-200) : []
-      });
-    }
-
-    if (kind === "clear_logs") {
-      state.logs = [];
-      await chrome.storage.local.remove("ttm_logs_v1");
-      return void send({ ok: true });
-    }
-
-    if (kind === "ttm_player_status") {
-      const tabId = sender?.tab?.id;
-      if (tabId != null) {
-        const prev = getPlayerStatus(tabId);
-        const wasBad = !!(prev && prev.hasVideo && !prev.adPlaying && (prev.paused || prev.muted));
-
-        const next = {
-          login: normalizeName(msg?.login),
-          hasVideo: !!msg?.hasVideo,
-          paused: !!msg?.paused,
-          muted: !!msg?.muted,
-          volume: msg?.volume ?? null,
-          adPlaying: !!msg?.adPlaying,
-          visible: !!msg?.visible,
-          focused: !!msg?.focused
-        };
-
-        const isBad = !!(next.hasVideo && !next.adPlaying && (next.paused || next.muted));
-
-        if (isBad) {
-          next.firstSeenBadAt = wasBad && prev?.firstSeenBadAt ? prev.firstSeenBadAt : Date.now();
-        } else {
-          next.firstSeenBadAt = 0;
-        }
-
-        rememberPlayerStatus(tabId, next);
-      }
-
-      return void send({ ok: true });
-    }
-
-    if (kind === "channel_status") {
+if (kind === "channel_status") {
   const login = loginFromSenderOrMessage(sender, msg);
   if (!login) {
     return void send({ ok: false, error: "missing_login" });
+  }
+
+  const closedNow = await closeSenderTabIfNowUnwanted(sender, "offline_or_redirected_not_followed");
+  if (closedNow) {
+    return void send({ ok: true, closed_now: true });
   }
 
   if (msg?.isOffline) {
@@ -1038,17 +1068,22 @@ chrome.runtime.onMessage.addListener((msg, sender, send) => {
   clearOfflineTimer(login);
   clearRaidTimer(login);
   return void send({ ok: true, live: true });
-  }
+}
 
-    if (kind === "raid_detected") {
+if (kind === "raid_detected") {
   const login = loginFromSenderOrMessage(sender, msg);
   if (!login) {
     return void send({ ok: false, error: "missing_login" });
   }
 
+  const closedNow = await closeSenderTabIfNowUnwanted(sender, "raid_redirect_not_followed");
+  if (closedNow) {
+    return void send({ ok: true, closed_now: true });
+  }
+
   scheduleRaidClose(login);
   return void send({ ok: true, scheduled: true, delay_ms: RAID_CLOSE_DELAY_MS });
-  }
+}
 
     return void send({
       ok: false,
