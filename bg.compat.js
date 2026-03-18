@@ -19,6 +19,9 @@ const TYPE_ALIASES = new Map([
   ["diagnose", "diagnose"],
   ["diag", "diagnose"],
 
+  ["ttm/temp_allow_channel", "temp_allow_channel"],
+  ["ttm_temp_allow_channel", "temp_allow_channel"],
+
   ["ttm_ping", "ping"],
   ["ttm_status", "ping"],
   ["ttm_enable", "toggle"],

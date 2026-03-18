@@ -321,6 +321,7 @@
 
   <div class="tabs">
     <div class="tab active" data-tab="settings">Settings</div>
+    <div class="tab" data-tab="changelog">Changelog</div>
     <div class="tab" data-tab="help">Help</div>
     <div class="tab" data-tab="debug">Debug</div>
   </div>
@@ -381,11 +382,25 @@
               <label class="checkbox-row"><input id="softWakeFocusedOnly" type="checkbox"> Only when browser is focused</label>
             </div>
           </div>
+          
+          <label class="checkbox-row">
+            <input id="closeUnfollowedTabs" type="checkbox">
+            Close managed tabs that drift to unfollowed channels
+          </label>
 
+          <label class="checkbox-row">
+            <input id="allowExtraTwitchTabs" type="checkbox">
+            Keep extra Twitch tabs open unless they are raid redirects
+          </label>
           <div class="subcard">
             <label class="field">
               <span class="label-title">Blacklist (one channel per line)</span>
               <textarea id="blacklistBox" class="miniTA"></textarea>
+            </label>
+            
+            <label class="field">
+              <span class="label-title">Temp Allow Duration (hours)</span>
+              <input id="tempWhitelistHours" type="number" min="1" step="1">
             </label>
 
             <div class="btns">
@@ -462,6 +477,20 @@
         </div>
       </section>
     </div>
+  </section>
+
+  <section id="panel-changelog" class="panel">
+  <section class="card">
+    <h2>Changelog</h2>
+    <p class="small">Loaded from the bundled README.md inside the extension package.</p>
+
+    <div class="btns">
+      <button id="reloadChangelog">Reload Changelog</button>
+    </div>
+
+    <div id="changelogStatus" class="status"></div>
+    <pre id="changelogOut" style="white-space: pre-wrap; line-height: 1.5; min-height: 320px;"></pre>
+  </section>
   </section>
 
   <section id="panel-help" class="panel">

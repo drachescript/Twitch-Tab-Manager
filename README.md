@@ -332,11 +332,27 @@ Full privacy policy:
 
 All notable changes use `DD/MM/YYYY`.
 
+### [1.0.8.8] — in development
+
+*nothing so far
+
+### [1.0.8.7] — 18/03/2026
+
+* Added a changelog tab in settings
+* If the extension is off, it should not do anything at all anymore, especially not close Twitch tabs
+* Better handling for extra Twitch tabs vs actual raid redirects
+* Added popup actions for Twitch tabs
+* Added temp whitelist with 12 hours as the default
+* More fixes for raid / offline / unfollowed tab stuff
+
 ### [1.0.8.6] — 16/03/2026
 * Existing open Twitch tabs now get picked back up after an extension reload or restart
 * fixed an issue with raided or offline channels not getting closed or being closed very late
 * fixed an issue where any value of max tabs wasnt actually used except 4
 * potentionally fixed an issue with offline or raided that arent followed wont be closed
+* general polish of code
+* Added an option to close managed tabs that drift to unfollowed channels
+* Reduced delay before closing offline or raided managed tabs
 
 ### [1.0.8.5] — 15/03/2026
 

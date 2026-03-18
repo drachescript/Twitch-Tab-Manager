@@ -61,7 +61,26 @@ document.addEventListener("DOMContentLoaded", () => {
 
     return `${date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} (${ago})`;
   }
+function getChannelFromUrl(url = "") {
+  try {
+    const u = new URL(url);
+    if (!/^(www\.)?twitch\.tv$/i.test(u.hostname)) return "";
+    const first = u.pathname.replace(/^\/+/, "").split("/")[0] || "";
+    return first.toLowerCase();
+  } catch {
+    return "";
+  }
+}
 
+async function getActiveTabChannel() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const channel = getChannelFromUrl(tab?.url || tab?.pendingUrl || "");
+    return { tab, channel };
+  } catch {
+    return { tab: null, channel: "" };
+  }
+}
   function setStatusText(enabled) {
     const on = enabled !== false;
 
@@ -127,6 +146,16 @@ document.addEventListener("DOMContentLoaded", () => {
     setBusy(true);
     flash("");
 
+    const actionWrap = document.getElementById("twitchTabActions");
+    const channelLabel = document.getElementById("currentTwitchChannel");
+
+    const active = await getActiveTabChannel();
+    if (active.channel) {
+      if (actionWrap) actionWrap.style.display = "";
+      if (channelLabel) channelLabel.textContent = active.channel;
+    } else {
+      if (actionWrap) actionWrap.style.display = "none";
+    }
     const ping =
       (await send("ttm/ping")) ||
       (await send("PING")) ||
@@ -175,6 +204,56 @@ document.addEventListener("DOMContentLoaded", () => {
     setBusy(false);
   }
 
+  async function addCurrentChannelToConfig(kind) {
+  const active = await getActiveTabChannel();
+  if (!active.channel) {
+    flash("Open a Twitch channel tab first.", "error");
+    return;
+  }
+
+  const got = await chrome.storage.local.get(["settings", "config"]);
+  const cfg = { ...(got.settings || got.config || {}) };
+
+  cfg.follows = Array.isArray(cfg.follows) ? cfg.follows : [];
+  cfg.priority = Array.isArray(cfg.priority) ? cfg.priority : [];
+  cfg.blacklist = Array.isArray(cfg.blacklist) ? cfg.blacklist : [];
+  cfg.followUnion = Array.isArray(cfg.followUnion) ? cfg.followUnion : [];
+
+  const ch = active.channel;
+
+  if (kind === "follow" && !cfg.follows.includes(ch)) cfg.follows.push(ch);
+  if (kind === "priority" && !cfg.priority.includes(ch)) cfg.priority.push(ch);
+  if (kind === "blacklist" && !cfg.blacklist.includes(ch)) cfg.blacklist.push(ch);
+
+  cfg.followUnion = [...new Set([...(cfg.follows || []), ...(cfg.priority || [])])];
+
+  await chrome.storage.local.set({
+    settings: cfg,
+    config: cfg,
+    follows: cfg.follows,
+    priority: cfg.priority,
+    followUnion: cfg.followUnion,
+    blacklist: cfg.blacklist
+  });
+
+  await send("ttm/reload_config");
+  flash(`Updated ${ch}.`, "ok");
+}
+async function tempAllowCurrentChannel() {
+  const active = await getActiveTabChannel();
+  if (!active.channel) {
+    flash("Open a Twitch channel tab first.", "error");
+    return;
+  }
+
+  const resp = await send("ttm/temp_allow_channel", { login: active.channel });
+  if (resp?.ok) flash(`Temp allowed ${active.channel}.`, "ok");
+  else flash(resp?.error || "Temp allow failed.", "error");
+}
+document.getElementById("btnAddFollow")?.addEventListener("click", () => addCurrentChannelToConfig("follow"));
+document.getElementById("btnAddPriority")?.addEventListener("click", () => addCurrentChannelToConfig("priority"));
+document.getElementById("btnAddBlacklist")?.addEventListener("click", () => addCurrentChannelToConfig("blacklist"));
+document.getElementById("btnTempAllow")?.addEventListener("click", () => tempAllowCurrentChannel());
   async function onToggleChanged() {
     if (busy) return;
 
