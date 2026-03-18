@@ -13,6 +13,10 @@ const CFG_DEFAULT = {
   autoplay_streams: false,
   soft_wake_tabs: false,
   soft_wake_only_when_browser_focused: true,
+  close_unfollowed_tabs: true,
+  allow_extra_twitch_tabs: true,
+  temp_whitelist_hours: 12,
+  temp_whitelist_entries: {},
   check_interval_sec: 60,
   max_tabs: 4,
   enabled: true,
@@ -73,6 +77,15 @@ function parseBool(value, fallback = false) {
 function clampConfig(input) {
   const cfg = mergeDefaults(input);
 
+  cfg.close_unfollowed_tabs = parseBool(cfg.close_unfollowed_tabs, true);
+  cfg.allow_extra_twitch_tabs = parseBool(cfg.allow_extra_twitch_tabs, true);
+  cfg.temp_whitelist_hours = Math.max(1, Number(cfg.temp_whitelist_hours || 12) || 12);
+
+  if (!cfg.temp_whitelist_entries || typeof cfg.temp_whitelist_entries !== "object" || Array.isArray(cfg.temp_whitelist_entries)) {
+    cfg.temp_whitelist_entries = {};
+  }
+
+  cfg.close_unfollowed_tabs = parseBool(cfg.close_unfollowed_tabs, true);
   cfg.enabled = parseBool(cfg.enabled, true);
   cfg.force_unmute = parseBool(cfg.force_unmute, true);
   cfg.unmute_streams = parseBool(cfg.unmute_streams, true);
@@ -135,7 +148,11 @@ async function writeConfigEverywhere(rawCfg) {
     autoplay_streams: cfg.autoplay_streams,
     soft_wake_tabs: cfg.soft_wake_tabs,
     soft_wake_only_when_browser_focused: cfg.soft_wake_only_when_browser_focused,
+    close_unfollowed_tabs: cfg.close_unfollowed_tabs,
     check_interval_sec: cfg.check_interval_sec,
+    allow_extra_twitch_tabs: cfg.allow_extra_twitch_tabs,
+    temp_whitelist_hours: cfg.temp_whitelist_hours,
+    temp_whitelist_entries: cfg.temp_whitelist_entries,
     max_tabs: cfg.max_tabs,
     follows: cfg.follows,
     priority: cfg.priority,
@@ -157,7 +174,13 @@ function fillQuickSettings(cfg) {
   const softWakeTabs = $("#softWakeTabs");
   const softWakeFocusedOnly = $("#softWakeFocusedOnly");
   const blacklistBox = $("#blacklistBox");
+  const closeUnfollowedTabs = $("#closeUnfollowedTabs");
+  const allowExtraTwitchTabs = $("#allowExtraTwitchTabs");
+  const tempWhitelistHours = $("#tempWhitelistHours");
 
+  if (allowExtraTwitchTabs) allowExtraTwitchTabs.checked = !!cfg.allow_extra_twitch_tabs;
+  if (tempWhitelistHours) tempWhitelistHours.value = String(cfg.temp_whitelist_hours ?? 12);
+  if (closeUnfollowedTabs) closeUnfollowedTabs.checked = !!cfg.close_unfollowed_tabs;
   if (liveSource) liveSource.value = cfg.live_source || "auto";
   if (checkInterval) checkInterval.value = String(cfg.check_interval_sec ?? 60);
   if (maxTabs) maxTabs.value = String(cfg.max_tabs ?? 4);
@@ -181,6 +204,9 @@ function readQuickSettings(baseCfg = {}) {
     force_unmute: !!$("#forceUnmute")?.checked,
     unmute_streams: !!$("#unmuteStreams")?.checked,
     force_resume: !!$("#forceResume")?.checked,
+    close_unfollowed_tabs: !!$("#closeUnfollowedTabs")?.checked,
+    allow_extra_twitch_tabs: !!$("#allowExtraTwitchTabs")?.checked,
+    temp_whitelist_hours: Number($("#tempWhitelistHours")?.value || baseCfg.temp_whitelist_hours || 12),
     autoplay_streams: !!$("#autoplayStreams")?.checked,
     soft_wake_tabs: !!$("#softWakeTabs")?.checked,
     soft_wake_only_when_browser_focused: !!$("#softWakeFocusedOnly")?.checked,
@@ -362,11 +388,15 @@ async function syncFetchedFollows(usernames) {
 
 function setupTabs() {
   document.querySelectorAll(".tab").forEach((tab) => {
-    tab.addEventListener("click", () => {
+    tab.addEventListener("click", async () => {
       document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
       document.querySelectorAll(".panel").forEach((x) => x.classList.remove("active"));
       tab.classList.add("active");
       document.getElementById("panel-" + tab.dataset.tab)?.classList.add("active");
+
+      if (tab.dataset.tab === "changelog") {
+        await loadChangelogTab();
+      }
     });
   });
 }
@@ -670,6 +700,81 @@ function setupDebugPanel() {
     setOut((out?.value ? out.value + "\n\n" : "") + line);
   });
 }
+async function loadBundledReadme() {
+  const url = chrome.runtime.getURL("README.md");
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) {
+    throw new Error(`README load failed: ${res.status}`);
+  }
+  return await res.text();
+}
+
+function extractChangelogSection(md) {
+  const text = String(md || "");
+  const lines = text.split(/\r?\n/);
+
+  let start = -1;
+  let end = lines.length;
+
+  for (let i = 0; i < lines.length; i++) {
+    if (/^##\s+changelog\b/i.test(lines[i].trim())) {
+      start = i + 1;
+      break;
+    }
+  }
+
+  if (start === -1) {
+    return "";
+  }
+
+  for (let i = start; i < lines.length; i++) {
+    if (/^##\s+/.test(lines[i].trim())) {
+      end = i;
+      break;
+    }
+  }
+
+  return lines.slice(start, end).join("\n").trim();
+}
+
+async function loadChangelogTab() {
+  const out = $("#changelogOut");
+  const status = $("#changelogStatus");
+  if (out) out.textContent = "Loading changelog...";
+  if (status) status.textContent = "";
+
+  try {
+    const md = await loadBundledReadme();
+    const section = extractChangelogSection(md);
+
+    if (!section) {
+      if (out) out.textContent = "No '## Changelog' section was found in README.md.";
+      if (status) {
+        status.textContent = "Could not find changelog section.";
+        status.className = "status err";
+      }
+      return;
+    }
+
+    if (out) out.textContent = section;
+    if (status) {
+      status.textContent = "Changelog loaded.";
+      status.className = "status ok";
+    }
+  } catch (e) {
+    if (out) out.textContent = "";
+    if (status) {
+      status.textContent = `Failed to load changelog: ${e.message || e}`;
+      status.className = "status err";
+    }
+  }
+}
+
+function setupChangelogTab() {
+  $("#reloadChangelog")?.addEventListener("click", () => {
+    loadChangelogTab();
+  });
+}
 
 async function init() {
   setupTabs();
@@ -679,6 +784,7 @@ async function init() {
   setupPriorityEditor();
   setupTokenTools();
   setupDebugPanel();
+  setupChangelogTab();
   await showManifestVersion();
   await loadUI();
 }

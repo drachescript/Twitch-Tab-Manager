@@ -31,6 +31,8 @@ const ACCEPTED_TYPES = [
   "TTM_PLAYER_STATUS",
   "TTM_CLEAR_LOGS",
   "channel_status",
+  "ttm/temp_allow_channel",
+  "TTM_TEMP_ALLOW_CHANNEL",
   "raid_detected"
 ];
 
@@ -40,7 +42,7 @@ const REPOKE_DELAYS_MS = [1500, 4500, 9000];
 
 const OPEN_GRACE_MS = 20000;
 const REOPEN_COOLDOWN_MS = 90000;
-const RAID_CLOSE_DELAY_MS = 90 * 1000;
+const RAID_CLOSE_DELAY_MS = 60000;
 const RAID_REOPEN_COOLDOWN_MS = 5 * 60 * 1000;
 
 const playerStatusByTab = new Map();
@@ -51,12 +53,12 @@ const raidTimers = new Map();
 const offlineTimers = new Map();
 const offlinePendingSinceByChannel = new Map();
 
-const OFFLINE_CLOSE_DELAY_MS = 45000;
+const OFFLINE_CLOSE_DELAY_MS = 20000;
 const SOFT_WAKE_MIN_STUCK_MS = 12000;
 const SOFT_WAKE_COOLDOWN_MS = 60000;
 const SOFT_WAKE_TAB_MS = 900;
 const missingLiveSinceByChannel = new Map();
-const LIVE_MISS_CLOSE_DELAY_MS = 120000;
+const LIVE_MISS_CLOSE_DELAY_MS = 45000;
 
 function parseBool(value, fallback) {
   if (value === true || value === false) return value;
@@ -91,12 +93,70 @@ function clampSettings(raw) {
   cfg.soft_wake_tabs = parseBool(cfg.soft_wake_tabs, false);
   cfg.soft_wake_only_when_browser_focused = parseBool(cfg.soft_wake_only_when_browser_focused, true);
 
+  cfg.close_unfollowed_tabs = parseBool(cfg.close_unfollowed_tabs, true);
+  cfg.allow_extra_twitch_tabs = parseBool(cfg.allow_extra_twitch_tabs, true);
+  cfg.temp_whitelist_hours = Math.max(1, Number(cfg.temp_whitelist_hours || 12) || 12);
+
+  if (!cfg.temp_whitelist_entries || typeof cfg.temp_whitelist_entries !== "object" || Array.isArray(cfg.temp_whitelist_entries)) {
+    cfg.temp_whitelist_entries = {};
+  }
+
   cfg.follows = uniqNames(cfg.follows);
   cfg.priority = uniqNames(cfg.priority);
   cfg.followUnion = uniqNames([...(cfg.follows || []), ...(cfg.priority || [])]);
   cfg.blacklist = uniqNames(cfg.blacklist);
 
   return cfg;
+}
+function getTempWhitelistEntries() {
+  return state.settings.temp_whitelist_entries || {};
+}
+
+function isTemporarilyAllowed(login) {
+  const key = normalizeName(login);
+  if (!key) return false;
+
+  const entries = getTempWhitelistEntries();
+  const expiresAt = Number(entries[key] || 0);
+  if (!expiresAt) return false;
+
+  if (Date.now() >= expiresAt) {
+    delete entries[key];
+    state.settings.temp_whitelist_entries = entries;
+    chrome.storage.local.set({
+      settings: state.settings,
+      config: state.settings,
+      temp_whitelist_entries: entries
+    }).catch(() => {});
+    return false;
+  }
+
+  return true;
+}
+
+async function tempAllowChannel(login) {
+  const key = normalizeName(login);
+  if (!key) return false;
+
+  const hours = Math.max(1, Number(state.settings.temp_whitelist_hours || 12) || 12);
+  const entries = getTempWhitelistEntries();
+  entries[key] = Date.now() + (hours * 60 * 60 * 1000);
+
+  state.settings.temp_whitelist_entries = entries;
+
+  await chrome.storage.local.set({
+    settings: state.settings,
+    config: state.settings,
+    temp_whitelist_entries: entries
+  });
+
+  log("temp_whitelist_added", { login: key, hours });
+  return true;
+}
+
+function isRaidLikeUrl(url = "") {
+  const value = String(url || "").toLowerCase();
+  return value.includes("referrer=raid");
 }
 
 function redactForDiag(settings = {}) {
@@ -604,6 +664,7 @@ async function reviewManagedTabsForSoftWake() {
 async function repokeManagedTabs() {
   const managedChannels = new Set(await listManaged());
   if (!managedChannels.size) return;
+  if (!isManagerEnabled()) return;
 
   try {
     const tabs = await chrome.tabs.query({
@@ -707,7 +768,12 @@ function scheduleOfflineClose(login) {
   log("offline_close_scheduled", { login: key, delayMs: OFFLINE_CLOSE_DELAY_MS });
 }
 
+function isManagerEnabled() {
+  return state.settings.enabled !== false;
+}
+
 function scheduleRaidClose(login) {
+  if (!isManagerEnabled()) return;
   const key = normalizeName(login);
   if (!key) return;
 
@@ -723,6 +789,8 @@ function scheduleRaidClose(login) {
   log("raid_close_scheduled", { login: key, delayMs: RAID_CLOSE_DELAY_MS });
 }
 async function closeManagedChannelsThatAreNowBlocked() {
+  if (!isManagerEnabled()) return;
+
   const managedChannels = await listManaged();
   if (!managedChannels.length) return;
 
@@ -732,43 +800,71 @@ async function closeManagedChannelsThatAreNowBlocked() {
   for (const login of managedChannels) {
     const key = normalizeName(login);
     if (!key) continue;
+    if (isTemporarilyAllowed(key)) continue;
 
     if (blacklist.has(key)) {
       await closeManagedChannelTab(key, "blacklist", RAID_REOPEN_COOLDOWN_MS);
       continue;
     }
 
-    if (!allowed.has(key)) {
+    if (state.settings.close_unfollowed_tabs !== false && !allowed.has(key)) {
       await closeManagedChannelTab(key, "not_followed_or_priority", RAID_REOPEN_COOLDOWN_MS);
     }
   }
 }
 async function closeSenderTabIfNowUnwanted(sender, reason = "drifted_unwanted") {
+  if (!isManagerEnabled()) return false;
+
   const tabId = sender?.tab?.id;
-  const currentLogin = channelFromUrl(sender?.tab?.url || sender?.tab?.pendingUrl || "");
+  const currentUrl = sender?.tab?.url || sender?.tab?.pendingUrl || "";
+  const currentLogin = channelFromUrl(currentUrl);
   if (!tabId || !currentLogin) return false;
+
+  if (isTemporarilyAllowed(currentLogin)) {
+    return false;
+  }
 
   const allowed = new Set(uniqNames(state.settings.followUnion || []));
   const blacklist = new Set(uniqNames(state.settings.blacklist || []));
 
-  if (blacklist.has(currentLogin) || !allowed.has(currentLogin)) {
+  const isBlocked = blacklist.has(currentLogin);
+  const isAllowed = allowed.has(currentLogin);
+  const raidLike = isRaidLikeUrl(currentUrl);
+
+  if (isBlocked) {
+    try {
+      await chrome.tabs.remove(tabId);
+      noteManagedClosed(currentLogin, RAID_REOPEN_COOLDOWN_MS);
+      log("closed_sender_tab_now_unwanted", { tabId, login: currentLogin, reason: "blacklist" });
+      return true;
+    } catch (e) {
+      log("close_sender_tab_now_unwanted_error", { tabId, login: currentLogin, reason: "blacklist", error: String(e) });
+      return false;
+    }
+  }
+
+  if (!isAllowed) {
+    if (state.settings.close_unfollowed_tabs === false) return false;
+
+    if (state.settings.allow_extra_twitch_tabs !== false && !raidLike) {
+      log("kept_extra_twitch_tab_open", { tabId, login: currentLogin, reason });
+      return false;
+    }
+
     try {
       await chrome.tabs.remove(tabId);
       noteManagedClosed(currentLogin, RAID_REOPEN_COOLDOWN_MS);
       log("closed_sender_tab_now_unwanted", { tabId, login: currentLogin, reason });
       return true;
     } catch (e) {
-      log("close_sender_tab_now_unwanted_error", {
-        tabId,
-        login: currentLogin,
-        reason,
-        error: String(e)
-      });
+      log("close_sender_tab_now_unwanted_error", { tabId, login: currentLogin, reason, error: String(e) });
+      return false;
     }
   }
 
   return false;
 }
+
 async function poll({ force = false } = {}) {
   await loadSettings();
   await closeManagedChannelsThatAreNowBlocked();
@@ -901,10 +997,12 @@ async function bootOnce() {
 
   let adoptedInfo = { adopted: 0, total: 0 };
 
-  try {
-    adoptedInfo = await adoptOpenTabs(state.settings.followUnion || []);
-  } catch (e) {
-    log("boot_adopt_error", String(e));
+  if (isManagerEnabled()) {
+    try {
+      adoptedInfo = await adoptOpenTabs(state.settings.followUnion || []);
+    } catch (e) {
+      log("boot_adopt_error", String(e));
+    }
   }
 
   try {
@@ -926,6 +1024,8 @@ chrome.runtime.onStartup?.addListener(() => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (!isManagerEnabled()) return;
+
   if (alarm?.name === "ttm-tick") {
     poll().catch((e) => log("alarm_poll_error", String(e)));
     return;
@@ -972,10 +1072,12 @@ if (kind === "reload") {
   await ensureAlarm();
 
   let adoptedInfo = { adopted: 0, total: 0 };
-  try {
-    adoptedInfo = await adoptOpenTabs(state.settings.followUnion || []);
-  } catch (e) {
-    log("reload_adopt_error", String(e));
+  if (isManagerEnabled()) {
+    try {
+      adoptedInfo = await adoptOpenTabs(state.settings.followUnion || []);
+    } catch (e) {
+      log("reload_adopt_error", String(e));
+    }
   }
 
   return void send({
@@ -1014,6 +1116,9 @@ if (kind === "clear_logs") {
 }
 
 if (kind === "ttm_player_status") {
+  if (!isManagerEnabled()) {
+  return void send({ ok: true, ignored: "disabled" });
+  }
   const tabId = sender?.tab?.id;
   if (tabId != null) {
     const prev = getPlayerStatus(tabId);
@@ -1045,6 +1150,9 @@ if (kind === "ttm_player_status") {
 }
 
 if (kind === "channel_status") {
+  if (!isManagerEnabled()) {
+  return void send({ ok: true, ignored: "disabled" });
+  }
   const login = loginFromSenderOrMessage(sender, msg);
   if (!login) {
     return void send({ ok: false, error: "missing_login" });
@@ -1071,6 +1179,9 @@ if (kind === "channel_status") {
 }
 
 if (kind === "raid_detected") {
+  if (!isManagerEnabled()) {
+  return void send({ ok: true, ignored: "disabled" });
+  }
   const login = loginFromSenderOrMessage(sender, msg);
   if (!login) {
     return void send({ ok: false, error: "missing_login" });
