@@ -30,7 +30,7 @@ if exist "%OUT%" del /f /q "%OUT%"
 
 REM Copy everything except excluded files/folders
 robocopy "%SRC%" "%STAGE%" /E ^
- /XD ".git" "_zip_stage" ^
+ /XD ".git" "_zip_stage" "archive" ^
  /XF ".gitattributes" ".gitignore" "README_old.md" "zip-twitch.bat" "twitch-tab-manager.zip" "zip-twitch-version.bat" "twitch-tab-manager-*.zip" ^
  /R:1 /W:1 >nul
 
