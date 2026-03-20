@@ -15,7 +15,10 @@
   lastStatusSentAt: 0,
   directUnmuteBlockedUntil: 0,
   playBlockedUntil: 0,
-  lastGuardLogAt: 0
+  lastGuardLogAt: 0,
+  lastVideoProgressAt: 0,
+  lastVideoTime: 0,
+  firstNoVideoAt: 0
   };
 
   function wait(ms) {
@@ -157,6 +160,49 @@ async function safePlay(video) {
     return false;
   }
 }
+
+function updateVideoProgress(video) {
+  if (!video) {
+    if (!state.firstNoVideoAt) state.firstNoVideoAt = Date.now();
+    state.lastVideoProgressAt = 0;
+    state.lastVideoTime = 0;
+    return;
+  }
+
+  state.firstNoVideoAt = 0;
+
+  const now = Date.now();
+  const currentTime = Number(video.currentTime || 0);
+
+  if (currentTime > state.lastVideoTime + 0.15) {
+    state.lastVideoProgressAt = now;
+    state.lastVideoTime = currentTime;
+    return;
+  }
+
+  if (!state.lastVideoProgressAt) {
+    state.lastVideoProgressAt = now;
+    state.lastVideoTime = currentTime;
+  }
+}
+
+function isLikelyStuckStarting(video) {
+  if (isAdPlaying()) return false;
+
+  if (!video) {
+    return !!state.firstNoVideoAt && (Date.now() - state.firstNoVideoAt >= 12000);
+  }
+
+  const readyState = Number(video.readyState || 0);
+  const currentTime = Number(video.currentTime || 0);
+  const stalledFor = state.lastVideoProgressAt ? (Date.now() - state.lastVideoProgressAt) : 0;
+
+  return (
+    readyState >= 2 &&
+    currentTime < 1.5 &&
+    stalledFor >= 12000
+  );
+}
   async function clickUnmuteIfNeeded() {
     const btn = getMuteButton();
     if (!btn) return false;
@@ -184,20 +230,23 @@ async function safePlay(video) {
   }
 
   function collectStatus() {
-    const video = getVideo();
-    const ad = isAdPlaying();
+  const video = getVideo();
+  const ad = isAdPlaying();
 
-    return {
-      login: getChannelLogin(),
-      url: location.href,
-      hasVideo: !!video,
-      paused: !!video?.paused,
-      muted: !!video?.muted,
-      volume: typeof video?.volume === "number" ? video.volume : null,
-      adPlaying: ad,
-      visible: !document.hidden,
-      focused: document.hasFocus()
-    };
+  return {
+    login: getChannelLogin(),
+    url: location.href,
+    hasVideo: !!video,
+    paused: !!video?.paused,
+    muted: !!video?.muted,
+    volume: typeof video?.volume === "number" ? video.volume : null,
+    readyState: typeof video?.readyState === "number" ? video.readyState : -1,
+    currentTime: typeof video?.currentTime === "number" ? video.currentTime : 0,
+    stalledStart: isLikelyStuckStarting(video),
+    adPlaying: ad,
+    visible: !document.hidden,
+    focused: document.hasFocus()
+  };
   }
 
   function shouldSendStatus(force = false) {
@@ -239,11 +288,11 @@ async function safePlay(video) {
   const opts = state.settings || {};
   const video = getVideo();
 
+  updateVideoProgress(video);
+
   if (opts.force_unmute || opts.unmute_streams) {
     await clickUnmuteIfNeeded();
 
-    // Only try direct unmute in a safe foreground situation.
-    // If Chrome rejects it once, back off for a while instead of hammering.
     if (video) {
       await safeDirectUnmute(video);
     }
@@ -253,6 +302,20 @@ async function safePlay(video) {
     await clickPlayIfNeeded();
 
     if (video?.paused) {
+      await safePlay(video);
+    }
+  }
+
+  if (isLikelyStuckStarting(video)) {
+    guardLog("stalled_start_detected", {
+      hasVideo: !!video,
+      currentTime: Number(video?.currentTime || 0),
+      readyState: Number(video?.readyState || -1)
+    });
+
+    await clickPlayIfNeeded();
+
+    if (video) {
       await safePlay(video);
     }
   }

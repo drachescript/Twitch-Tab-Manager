@@ -332,9 +332,10 @@ Full privacy policy:
 
 All notable changes use `DD/MM/YYYY`.
 
-### [1.0.8.8] — in development
+### [1.0.8.8] — 20/03/2026
 
-*nothing so far
+* Added a possible fix for newly opened live tabs sometimes staying on Twitch’s starting / standby screen until the tab is focused
+* Started cleaning up for 1.0.9 by splitting `background.js` and `options.js` into multiple files for easier debugging and file management
 
 ### [1.0.8.7] — 18/03/2026
 

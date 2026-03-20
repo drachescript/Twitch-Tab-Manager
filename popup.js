@@ -92,10 +92,17 @@ async function getActiveTabChannel() {
       : "Manager is currently disabled.";
   }
 
-  function setStats({ openCount, liveCount, maxTabs }) {
-    elStatOpen.textContent = Number.isFinite(openCount) ? String(openCount) : "—";
-    elStatLive.textContent = Number.isFinite(liveCount) ? String(liveCount) : "—";
+  function setStats({ openCount, liveCount, maxTabs, loading = false }) {
+  if (loading) {
+    elStatOpen.textContent = "Loading…";
+    elStatLive.textContent = "Loading…";
     elStatMax.textContent = Number.isFinite(maxTabs) ? String(maxTabs) : "—";
+    return;
+  }
+
+  elStatOpen.textContent = Number.isFinite(openCount) ? String(openCount) : "—";
+  elStatLive.textContent = Number.isFinite(liveCount) ? String(liveCount) : "—";
+  elStatMax.textContent = Number.isFinite(maxTabs) ? String(maxTabs) : "—";
   }
 
   function send(type, payload) {
@@ -160,6 +167,7 @@ async function getActiveTabChannel() {
       (await send("ttm/ping")) ||
       (await send("PING")) ||
       (await send("TTM_STATUS"));
+      
 
     const enabled =
       ping && typeof ping.enabled === "boolean"
@@ -198,7 +206,15 @@ async function getActiveTabChannel() {
       Number(bag?.max_tabs) ||
       null;
 
-    setStats({ openCount, liveCount, maxTabs });
+    const isLoading = !!(ping?.loading || diag?.loading);
+
+    setStats({
+      openCount,
+      liveCount,
+      maxTabs,
+      loading: isLoading
+    });
+
     await refreshMeta();
 
     setBusy(false);
