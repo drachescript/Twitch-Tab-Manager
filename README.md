@@ -332,6 +332,18 @@ Full privacy policy:
 
 All notable changes use `DD/MM/YYYY`.
 
+### [1.0.8.9] — 21/03/2026
+
+* Massive recovery / fix update after the split broke a lot more than it should have
+* Fixed browser config handling so existing saved settings are properly preferred again
+* Fixed broken storage / migration logic that could cause empty or reset-looking configs
+* Fixed options page loading showing blank / wrong values
+* Fixed quick settings and config editor saves so they stop wiping unrelated settings
+* Added multiple automatic config backups
+* Added easier config restore / export tools in Debug
+* Improved overall stability and brought behavior closer to the old working background logic
+* Tightened popup config handling to better preserve browser-stored settings during popup-side actions
+
 ### [1.0.8.8] — 20/03/2026
 
 * Added a possible fix for newly opened live tabs sometimes staying on Twitch’s starting / standby screen until the tab is focused
