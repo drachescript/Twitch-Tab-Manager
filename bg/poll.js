@@ -10,10 +10,69 @@ import {
 
 const T = (globalThis.TTM = globalThis.TTM || {});
 
+// close much sooner when a channel drops out of live detection
 const missingLiveSinceByChannel = new Map();
-const LIVE_MISS_CLOSE_DELAY_MS = 45000;
+const LIVE_MISS_CLOSE_DELAY_MS = 10000;
 
 let booted = false;
+let consecutiveEmptyLivePolls = 0;
+
+function isRaidLikeUrl(url = "") {
+  return String(url || "").toLowerCase().includes("referrer=raid");
+}
+
+function channelFromUrl(url = "") {
+  try {
+    const u = new URL(String(url || ""));
+    if (!/^(www\.)?twitch\.tv$/i.test(u.hostname)) return "";
+    const first = u.pathname.replace(/^\/+/, "").split("/")[0] || "";
+    if (!first) return "";
+    if ([
+      "directory",
+      "downloads",
+      "jobs",
+      "p",
+      "settings",
+      "subscriptions",
+      "inventory",
+      "wallet",
+      "videos",
+      "schedule",
+      "about"
+    ].includes(first.toLowerCase())) {
+      return "";
+    }
+    return first.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+async function closeRaidRedirectTabsThatAreNowUnwanted(liveList) {
+  try {
+    const liveSet = new Set((liveList || []).map((x) => T.normalizeName(x)));
+    const tabs = await chrome.tabs.query({ url: ["https://www.twitch.tv/*"] });
+
+    for (const tab of tabs) {
+    const url = tab?.url || tab?.pendingUrl || "";
+    if (!isRaidLikeUrl(url)) continue;
+
+    const login = channelFromUrl(url);
+    if (!login) continue;
+
+    if (!liveSet.has(login)) {
+      try {
+        await chrome.tabs.remove(tab.id);
+        log("raid_redirect_tab_closed", { login, tabId: tab.id, url });
+      } catch (e) {
+        log("raid_redirect_tab_close_error", { login, tabId: tab.id, error: String(e) });
+      }
+    }
+  }
+    } catch (e) {
+      log("raid_redirect_scan_error", String(e));
+    }
+  }
 
 async function poll({ force = false } = {}) {
   await loadSettings();
@@ -36,7 +95,7 @@ async function poll({ force = false } = {}) {
     log("poll_live_error", String(e));
   }
 
-  state.lastLiveCount = liveList.length;
+    state.lastLiveCount = liveList.length;
 
   liveList = liveList.filter((login) => {
     const key = T.normalizeName(login);
@@ -46,44 +105,62 @@ async function poll({ force = false } = {}) {
     return true;
   });
 
-  const currentlyOpen = Array.isArray(state.openChannels) ? state.openChannels : [];
+  if (liveList.length === 0) consecutiveEmptyLivePolls += 1;
+  else consecutiveEmptyLivePolls = 0;
 
-  if (liveList.length === 0 && currentlyOpen.length > 0 && state.settings.followUnion.length > 0) {
-    log("poll_keep_open", {
-      reason: "transient_empty_live_set",
-      open_count: currentlyOpen.length,
-      configured_count: state.settings.followUnion.length
+  try {
+    const now = Date.now();
+    const managedNow = await listManaged();
+    const liveNowSet = new Set(liveList);
+
+    for (const ch of managedNow) {
+      if (liveNowSet.has(ch)) {
+        missingLiveSinceByChannel.delete(ch);
+      } else if (!missingLiveSinceByChannel.has(ch)) {
+        missingLiveSinceByChannel.set(ch, now);
+      }
+    }
+
+    for (const ch of [...missingLiveSinceByChannel.keys()]) {
+      if (!managedNow.includes(ch)) {
+        missingLiveSinceByChannel.delete(ch);
+      }
+    }
+
+    const debouncedLiveList = T.uniqNames([
+      ...liveList,
+      ...managedNow.filter((ch) => {
+        const missingSince = missingLiveSinceByChannel.get(ch);
+        if (!missingSince) return false;
+        return now - missingSince < LIVE_MISS_CLOSE_DELAY_MS;
+      })
+    ]);
+
+    log("poll_reconcile", {
+      detected_live: liveList,
+      managed_now: managedNow,
+      debounced_live: debouncedLiveList,
+      debounce_ms: LIVE_MISS_CLOSE_DELAY_MS
     });
 
-    await closeManagedChannelsThatAreNowBlocked();
-  } else {
-    try {
-      const now = Date.now();
-      const managedNow = await listManaged();
-      const liveNowSet = new Set(liveList);
+        const shouldSkipMassClose =
+      debouncedLiveList.length === 0 &&
+      managedNow.length > 0 &&
+      consecutiveEmptyLivePolls < 2;
 
-      for (const ch of managedNow) {
-        if (liveNowSet.has(ch)) {
-          missingLiveSinceByChannel.delete(ch);
-        } else if (!missingLiveSinceByChannel.has(ch)) {
-          missingLiveSinceByChannel.set(ch, now);
-        }
-      }
-
-      const debouncedLiveList = T.uniqNames([
-        ...liveList,
-        ...managedNow.filter((ch) => {
-          const missingSince = missingLiveSinceByChannel.get(ch);
-          if (!missingSince) return false;
-          return now - missingSince < LIVE_MISS_CLOSE_DELAY_MS;
-        })
-      ]);
-
+    if (shouldSkipMassClose) {
+      log("poll_skip_mass_close_once", {
+        detected_live: liveList,
+        managed_now: managedNow,
+        consecutiveEmptyLivePolls
+      });
+    } else {
       await reconcileTabs(debouncedLiveList, state.settings);
       await closeManagedChannelsThatAreNowBlocked();
-    } catch (e) {
-      log("poll_reconcile_error", String(e));
+      await closeRaidRedirectTabsThatAreNowUnwanted(liveList);
     }
+  } catch (e) {
+    log("poll_reconcile_error", String(e));
   }
 
   try {
@@ -100,7 +177,9 @@ async function poll({ force = false } = {}) {
 
     log("poll_done", {
       live_count: Number(state.lastLiveCount || 0),
+      live_channels: state.lastLive,
       open_count: managed.length,
+      open_channels: managed,
       max_tabs: state.settings.max_tabs,
       force: !!force
     });
@@ -108,7 +187,9 @@ async function poll({ force = false } = {}) {
     return {
       ok: true,
       live_count: Number(state.lastLiveCount || 0),
+      live_channels: state.lastLive.slice(),
       open_count: managed.length,
+      open_channels: managed.slice(),
       max_tabs: state.settings.max_tabs,
       force: !!force
     };

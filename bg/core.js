@@ -59,9 +59,18 @@ export function log(type, detail) {
     state.logs.push(line);
     if (state.logs.length > 400) state.logs.splice(0, state.logs.length - 400);
     chrome.storage.local.set({ [LS_KEYS.logs]: state.logs });
-    // also mirror to console (nice for DevTools)
-    if (type.includes("error")) console.error("[TTM]", type, detail);
-    else console.log("[TTM]", type, detail);
+
+    let printable = detail;
+    if (detail && typeof detail === "object") {
+      try {
+        printable = JSON.stringify(detail);
+      } catch {
+        printable = String(detail);
+      }
+    }
+
+    if (type.includes("error")) console.error("[TTM]", type, printable);
+    else console.log("[TTM]", type, printable);
   } catch { /* noop */ }
 }
 
