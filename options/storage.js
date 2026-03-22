@@ -25,12 +25,20 @@ export const CFG_DEFAULT = {
   blacklist: []
 };
 
+const BACKUP_HISTORY_KEY = "ttm_backup_history_v2";
+const BACKUP_LAST_KEY = "ttm_backup_last_good_config_v2";
+const BACKUP_LIMIT = 25;
+
 export function mergeDefaults(input) {
   return { ...CFG_DEFAULT, ...(input || {}) };
 }
 
 export function clampConfig(input) {
   const cfg = mergeDefaults(input);
+
+  cfg.live_source = String(cfg.live_source || "auto").trim().toLowerCase() || "auto";
+  cfg.client_id = String(cfg.client_id || "");
+  cfg.access_token = String(cfg.access_token || "");
 
   cfg.enabled = parseBool(cfg.enabled, true);
   cfg.force_unmute = parseBool(cfg.force_unmute, true);
@@ -59,6 +67,68 @@ export function clampConfig(input) {
   return cfg;
 }
 
+function pickObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+
+function getLegacyFlatConfig(bag = {}) {
+  return {
+    enabled: bag.enabled,
+    live_source: bag.live_source,
+    client_id: bag.client_id,
+    access_token: bag.access_token,
+    force_unmute: bag.force_unmute,
+    unmute_streams: bag.unmute_streams,
+    force_resume: bag.force_resume,
+    autoplay_streams: bag.autoplay_streams,
+    soft_wake_tabs: bag.soft_wake_tabs,
+    soft_wake_only_when_browser_focused: bag.soft_wake_only_when_browser_focused,
+    close_unfollowed_tabs: bag.close_unfollowed_tabs,
+    allow_extra_twitch_tabs: bag.allow_extra_twitch_tabs,
+    temp_whitelist_hours: bag.temp_whitelist_hours,
+    temp_whitelist_entries: bag.temp_whitelist_entries,
+    check_interval_sec: bag.check_interval_sec,
+    max_tabs: bag.max_tabs,
+    follows: Array.isArray(bag.follows) ? bag.follows : [],
+    priority: Array.isArray(bag.priority) ? bag.priority : [],
+    followUnion: Array.isArray(bag.followUnion) ? bag.followUnion : [],
+    blacklist: Array.isArray(bag.blacklist) ? bag.blacklist : []
+  };
+}
+
+export function browserBagHasMeaningfulConfig(bag = {}) {
+  const nested =
+    pickObject(bag.settings) ||
+    pickObject(bag.config) ||
+    pickObject(bag.ttm_settings_v1) ||
+    {};
+
+  const legacy = getLegacyFlatConfig(bag);
+
+  const listHasData =
+    (Array.isArray(nested.follows) && nested.follows.length > 0) ||
+    (Array.isArray(nested.priority) && nested.priority.length > 0) ||
+    (Array.isArray(nested.blacklist) && nested.blacklist.length > 0) ||
+    (Array.isArray(legacy.follows) && legacy.follows.length > 0) ||
+    (Array.isArray(legacy.priority) && legacy.priority.length > 0) ||
+    (Array.isArray(legacy.blacklist) && legacy.blacklist.length > 0);
+
+  const scalarHasData = [
+    nested.client_id,
+    nested.access_token,
+    nested.live_source,
+    nested.check_interval_sec,
+    nested.max_tabs,
+    legacy.client_id,
+    legacy.access_token,
+    legacy.live_source,
+    legacy.check_interval_sec,
+    legacy.max_tabs
+  ].some((v) => v !== undefined && v !== null && String(v) !== "");
+
+  return listHasData || scalarHasData;
+}
+
 export async function readStorage() {
   try {
     return await chrome.storage.local.get(null);
@@ -67,13 +137,16 @@ export async function readStorage() {
   }
 }
 
-export function getStoredConfig(bag) {
-  const raw =
-    bag?.settings ??
-    bag?.config ??
-    bag?.ttm_settings_v1 ??
-    {};
-  return clampConfig(raw);
+export function getStoredConfig(bag = {}) {
+  const legacy = getLegacyFlatConfig(bag);
+
+  const nestedSources = [
+    pickObject(bag.ttm_settings_v1),
+    pickObject(bag.config),
+    pickObject(bag.settings)
+  ].filter(Boolean);
+
+  return clampConfig(Object.assign({}, legacy, ...nestedSources));
 }
 
 export async function packagedConfig() {
@@ -99,12 +172,104 @@ export async function packagedFollows() {
   }
 }
 
-export async function writeConfigEverywhere(cfg) {
+function buildSnapshot(cfg, reason = "manual") {
   const clean = clampConfig(cfg);
+
+  return {
+    saved_at: new Date().toISOString(),
+    reason,
+    summary: {
+      follows_count: clean.follows.length,
+      priority_count: clean.priority.length,
+      blacklist_count: clean.blacklist.length,
+      has_client_id: !!clean.client_id,
+      has_access_token: !!clean.access_token,
+      live_source: clean.live_source,
+      enabled: clean.enabled,
+      max_tabs: clean.max_tabs,
+      check_interval_sec: clean.check_interval_sec
+    },
+    settings: clean
+  };
+}
+
+function stableStringify(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(",")}]`;
+  }
+
+  const keys = Object.keys(value).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
+}
+
+export async function listStoredBackups() {
+  const got = await chrome.storage.local.get([BACKUP_HISTORY_KEY, BACKUP_LAST_KEY]);
+  return {
+    last: got[BACKUP_LAST_KEY] || null,
+    history: Array.isArray(got[BACKUP_HISTORY_KEY]) ? got[BACKUP_HISTORY_KEY] : []
+  };
+}
+
+export async function pushBackupSnapshot(snapshot) {
+  if (!snapshot?.settings) return null;
+
+  const got = await chrome.storage.local.get([BACKUP_HISTORY_KEY, BACKUP_LAST_KEY]);
+  const history = Array.isArray(got[BACKUP_HISTORY_KEY]) ? got[BACKUP_HISTORY_KEY] : [];
+  const last = got[BACKUP_LAST_KEY] || null;
+
+  const currentSig = stableStringify(snapshot.settings);
+  const lastSig = last?.settings ? stableStringify(last.settings) : "";
+
+  if (currentSig === lastSig) {
+    return last;
+  }
+
+  history.push(snapshot);
+  while (history.length > BACKUP_LIMIT) history.shift();
+
+  await chrome.storage.local.set({
+    [BACKUP_LAST_KEY]: snapshot,
+    [BACKUP_HISTORY_KEY]: history
+  });
+
+  return snapshot;
+}
+
+export async function backupCurrentBrowserConfig(reason = "manual_backup") {
+  const bag = await readStorage();
+  if (!browserBagHasMeaningfulConfig(bag)) return null;
+
+  const cfg = getStoredConfig(bag);
+  return pushBackupSnapshot(buildSnapshot(cfg, reason));
+}
+
+export async function restoreBackupByIndex(index = -1) {
+  const { history, last } = await listStoredBackups();
+  const chosen = index === -1 ? (last || history[history.length - 1] || null) : history[index] || null;
+
+  if (!chosen?.settings) {
+    throw new Error("No backup found to restore.");
+  }
+
+  return writeConfigEverywhere(chosen.settings, {
+    reason: "restore_backup",
+    skipPreBackup: true
+  });
+}
+
+export async function writeConfigEverywhere(cfg, { reason = "manual_save", skipPreBackup = false } = {}) {
+  const clean = clampConfig(cfg);
+
+  if (!skipPreBackup) {
+    await backupCurrentBrowserConfig(`before_${reason}`);
+  }
 
   await chrome.storage.local.set({
     settings: clean,
     config: clean,
+    ttm_settings_v1: clean,
     enabled: clean.enabled,
     live_source: clean.live_source,
     client_id: clean.client_id,
@@ -130,21 +295,27 @@ export async function writeConfigEverywhere(cfg) {
     followUnion_count: clean.followUnion.length
   });
 
+  await pushBackupSnapshot(buildSnapshot(clean, `after_${reason}`));
   return clean;
 }
 
 export async function loadUI() {
   const bag = await readStorage();
-  const cfg = getStoredConfig(bag);
-  const follows = Array.isArray(bag.follows) && bag.follows.length
-    ? uniqNames(bag.follows)
-    : cfg.follows.length
-      ? cfg.follows
-      : await packagedFollows();
+  const hasBrowserConfig = browserBagHasMeaningfulConfig(bag);
 
-  const priority = Array.isArray(bag.priority) && bag.priority.length
-    ? uniqNames(bag.priority)
-    : cfg.priority;
+  let cfg;
+  let follows;
+  let priority;
+
+  if (hasBrowserConfig) {
+    cfg = getStoredConfig(bag);
+    follows = uniqNames(Array.isArray(bag.follows) ? bag.follows : cfg.follows);
+    priority = uniqNames(Array.isArray(bag.priority) ? bag.priority : cfg.priority);
+  } else {
+    cfg = await packagedConfig();
+    follows = await packagedFollows();
+    priority = uniqNames(cfg.priority);
+  }
 
   const fullCfg = clampConfig({
     ...cfg,
@@ -154,12 +325,12 @@ export async function loadUI() {
   });
 
   if (cfgTA()) cfgTA().value = JSON.stringify(fullCfg, null, 2);
-  if (folTA()) folTA().value = follows.join("\n");
+  if (folTA()) folTA().value = fullCfg.follows.join("\n");
+  if ($("#priorityBox")) $("#priorityBox").value = fullCfg.priority.join("\n");
+  if ($("#blacklistBox")) $("#blacklistBox").value = fullCfg.blacklist.join("\n");
 
   fillQuickSettings(fullCfg);
-
-  const priorityBox = $("#priorityBox");
-  if (priorityBox) priorityBox.value = priority.join("\n");
-
   renderTokenSnippets();
+
+  return fullCfg;
 }

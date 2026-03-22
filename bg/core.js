@@ -92,44 +92,6 @@ export function redactForDiag(s) {
   return redacted;
 }
 
-async function diagnose() {
-  const settings = state.settings;
-
-  const playerStatuses = Array.from((globalThis.__TTM_PLAYER_STATUS_MAP__ || new Map()).entries?.() || []);
-  const stalledTabs = playerStatuses
-    .map(([tabId, info]) => ({
-      tabId: Number(tabId),
-      login: info?.login || "",
-      stalledStart: !!info?.stalledStart,
-      paused: !!info?.paused,
-      muted: !!info?.muted,
-      hasVideo: !!info?.hasVideo,
-      readyState: Number(info?.readyState ?? -1),
-      currentTime: Number(info?.currentTime ?? 0),
-      seenAt: Number(info?.seenAt || 0)
-    }))
-    .filter((x) => x.stalledStart);
-
-  const diag = {
-    ok: true,
-    settings: {
-      live_source: settings.live_source,
-      max_tabs: settings.max_tabs,
-      follows_count: Array.isArray(settings.follows) ? settings.follows.length : 0,
-      priority_count: Array.isArray(settings.priority) ? settings.priority.length : 0,
-      followUnion_count: Array.isArray(settings.followUnion) ? settings.followUnion.length : 0
-    },
-    loading: !!state.loading,
-    live_count: Number(state.lastLiveCount || 0),
-    open_count: Array.isArray(state.openChannels) ? state.openChannels.length : 0,
-    capacity: Math.max(0, (settings.max_tabs || 0) - (state.openChannels?.length || 0)),
-    stalled_tabs: stalledTabs,
-    logs: state.logs?.slice(-12) || []
-  };
-
-  return diag;
-}
-
 // ---- alarms ----
 export async function armAlarm() {
   const everySec = Math.max(15, Number(state.settings.check_interval_sec || 60));

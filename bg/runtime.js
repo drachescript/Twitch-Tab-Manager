@@ -1,4 +1,5 @@
-import { state, diagnose } from "./core.js";
+import { state } from "./core.js";
+import { diagnose } from "./diagnose.js";
 import { ensureAlarm, setEnabled, normalizeType } from "./compat.js";
 import { loadSettings } from "./config.js";
 import { fetchMyFollows } from "./follows.js";

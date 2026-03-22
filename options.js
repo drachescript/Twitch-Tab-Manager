@@ -1,1 +1,1 @@
-import "./bg/app.js";
+import "./options/app.js";
