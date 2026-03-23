@@ -332,6 +332,26 @@ Full privacy policy:
 
 All notable changes use `DD/MM/YYYY`.
 
+### [1.0.10] — planned
+
+* Make managed Twitch tab recovery as hands-off as possible
+* Avoid forced window focusing during normal recovery / repoke behavior
+* Improve hidden-tab retry handling before any stronger wake action is considered
+* Keep soft-wake conservative and optional so gameplay / active windows are not interrupted
+
+### [1.0.9] — 22/03/2026
+
+* Removed the annoying tab-based Following Live fallback that could open extra Twitch directory tabs in the background
+* Fixed managed live tabs lingering too long after channels went offline
+* Tightened offline close behavior so tabs close much sooner when nobody is live anymore
+* Improved diagnostics output to show detected live channels and currently open Twitch tabs more clearly
+* Improved raid redirect cleanup so unwanted `?referrer=raid` tabs do not linger as long
+* Fixed a probe / offline-detection regression that could cause live checks to fail and tabs to close incorrectly
+* Improved error logging so probe failures are easier to read and diagnose
+* Added a safety net to avoid immediate mass-closing of tabs after a single bad empty live poll
+* Kept live checking / recovery more hands-off by avoiding the old tab-based fallback during normal polling
+* Kept recovery behavior conservative so the extension is less likely to interrupt gameplay or refocus the browser unexpectedly
+
 ### [1.0.8.9] — 21/03/2026
 
 * Massive recovery / fix update after the split broke a lot more than it should have
@@ -463,17 +483,10 @@ All notable changes use `DD/MM/YYYY`.
 
 ### High priority
 
-* Finish safer soft-wake fallback for stuck Twitch tabs
-* Add UI toggles for:
-
-  * `soft_wake_tabs`
-  * `soft_wake_only_when_browser_focused`
-* Improve player-state handling so hidden tabs are resumed/unmuted more reliably
-* Add clearer follow-sync history in Options:
-
-  * added usernames
-  * removed usernames
-  * last sync time
+* Further improve hands-off recovery for managed Twitch tabs without refocusing the browser
+* Keep improving player-state handling so hidden tabs recover more reliably
+* Keep `soft_wake_tabs` conservative and optional
+* Keep improving live detection resilience when Twitch changes page structure
 
 ### Medium priority
 
@@ -481,13 +494,10 @@ All notable changes use `DD/MM/YYYY`.
 * Better handling for tab reuse vs manager-owned tabs
 * Improved duplicate detection across Twitch windows
 * Stronger stuck-tab detection before any wake/focus action
-* More reliable “Use my current Twitch tab” fetch behavior
 
 ### Lower priority / future ideas
 
 * Optional quality control
 * Volume memory
-* Better debug view in Options
 * Channel points helper / notifier
 * Better ad-aware behavior
-* Better recovery when Twitch changes page structure

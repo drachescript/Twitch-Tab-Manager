@@ -1,6 +1,20 @@
 import { log } from "./core.js";
 
 const RE_CHAN = /^https?:\/\/(?:www\.)?twitch\.tv\/([a-z0-9_]+)(?:\/|$)/i;
+const NON_CHANNEL_ROUTES = new Set([
+  "directory",
+  "downloads",
+  "jobs",
+  "p",
+  "settings",
+  "subscriptions",
+  "inventory",
+  "wallet",
+  "videos",
+  "schedule",
+  "about"
+]);
+
 const CHANNEL_KEY = "ttm.managed.channels";
 const OWNED_KEY = "ttm.managed.owned";
 const OPENING_TTL_MS = 5000;
@@ -17,9 +31,19 @@ function norm(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function isRaidLikeUrl(url) {
+  return String(url || "").toLowerCase().includes("referrer=raid");
+}
+
 function chanFromUrl(url) {
   const match = String(url || "").match(RE_CHAN);
-  return match ? norm(match[1]) : null;
+  if (!match) return null;
+
+  const ch = norm(match[1]);
+  if (!ch) return null;
+  if (NON_CHANNEL_ROUTES.has(ch)) return null;
+
+  return ch;
 }
 
 function purgeOpening() {
@@ -54,6 +78,7 @@ async function rehydrateManagedFromReality() {
       const tab = await chrome.tabs.get(tabId);
       const actual = chanFromUrl(tab.url || tab.pendingUrl || "");
       if (!actual) continue;
+      if (isRaidLikeUrl(tab.url || tab.pendingUrl || "")) continue;
 
       nextOwned[String(tabId)] = true;
       nextChannels[actual] = tabId;
@@ -62,6 +87,43 @@ async function rehydrateManagedFromReality() {
 
   managedChannels = nextChannels;
   ownedTabs = nextOwned;
+  await saveManagedState();
+}
+
+function isManaged(tabOrId) {
+  if (typeof tabOrId === "number") {
+    return !!ownedTabs[String(tabOrId)];
+  }
+
+  const tabId = Number(tabOrId?.id);
+  if (!tabId) return false;
+  return !!ownedTabs[String(tabId)];
+}
+
+async function noteManaged(channel, tabId, via = "manager") {
+  const ch = norm(channel);
+  if (!ch || !tabId) return;
+
+  ownedTabs[String(tabId)] = true;
+  managedChannels[ch] = tabId;
+  await saveManagedState();
+
+  if (globalThis.TTM_STAB?.setTab) globalThis.TTM_STAB.setTab(ch, tabId, via);
+  if (globalThis.TTM_STAB?.markAction) globalThis.TTM_STAB.markAction(ch);
+
+  if (globalThis.TTM?.scheduleTabRepokes) {
+    globalThis.TTM.scheduleTabRepokes(tabId);
+  }
+
+  if (globalThis.TTM?.noteManagedOpen) {
+    globalThis.TTM.noteManagedOpen(ch);
+  }
+}
+
+async function unnoteManaged(channel, tabId) {
+  const ch = norm(channel);
+  if (ch) delete managedChannels[ch];
+  if (tabId) delete ownedTabs[String(tabId)];
   await saveManagedState();
 }
 
@@ -75,7 +137,10 @@ async function findExistingChannelTab(channel) {
     });
 
     for (const tab of tabs) {
-      const actual = chanFromUrl(tab.url || tab.pendingUrl || "");
+      const rawUrl = tab.url || tab.pendingUrl || "";
+      if (isRaidLikeUrl(rawUrl)) continue;
+
+      const actual = chanFromUrl(rawUrl);
       if (actual === ch) return tab;
     }
   } catch {}
@@ -126,7 +191,10 @@ async function scanOpenDesiredChannels(desiredList) {
     });
 
     for (const tab of tabs) {
-      const ch = chanFromUrl(tab.url || tab.pendingUrl || "");
+      const rawUrl = tab.url || tab.pendingUrl || "";
+      if (isRaidLikeUrl(rawUrl)) continue;
+
+      const ch = chanFromUrl(rawUrl);
       if (ch && desired.has(ch)) out.add(ch);
     }
   } catch {}
@@ -144,11 +212,7 @@ function buildPriorityMap(priority) {
 
 function getChannelRank(channel, priorityMap) {
   const ch = norm(channel);
-
-  if (priorityMap.has(ch)) {
-    return priorityMap.get(ch);
-  }
-
+  if (priorityMap.has(ch)) return priorityMap.get(ch);
   return 1000000;
 }
 
@@ -175,6 +239,7 @@ async function closeWorstManagedFor(candidateChannel, openSet, priorityMap) {
   await ensureClosed(worstOpen);
   return worstOpen;
 }
+
 export async function adoptOpenTabs(allowedChannels = []) {
   await loadManagedState();
   await rehydrateManagedFromReality();
@@ -190,7 +255,10 @@ export async function adoptOpenTabs(allowedChannels = []) {
     });
 
     for (const tab of tabs) {
-      const ch = chanFromUrl(tab.url || tab.pendingUrl || "");
+      const rawUrl = tab.url || tab.pendingUrl || "";
+      if (isRaidLikeUrl(rawUrl)) continue;
+
+      const ch = chanFromUrl(rawUrl);
       if (!ch) continue;
       if (!allowed.has(ch)) continue;
       if (!tab.id) continue;
@@ -200,25 +268,8 @@ export async function adoptOpenTabs(allowedChannels = []) {
         continue;
       }
 
-      managedChannels[ch] = tab.id;
-      ownedTabs[String(tab.id)] = true;
+      await noteManaged(ch, tab.id, "boot:adopted");
       adopted += 1;
-
-      if (globalThis.TTM_STAB?.setTab) {
-        globalThis.TTM_STAB.setTab(ch, tab.id, "boot:adopted");
-      }
-
-      if (globalThis.TTM_STAB?.markAction) {
-        globalThis.TTM_STAB.markAction(ch);
-      }
-
-      if (globalThis.TTM?.scheduleTabRepokes) {
-        globalThis.TTM.scheduleTabRepokes(tab.id);
-      }
-
-      if (globalThis.TTM?.noteManagedOpen) {
-        globalThis.TTM.noteManagedOpen(ch);
-      }
     }
 
     await saveManagedState();
@@ -228,6 +279,7 @@ export async function adoptOpenTabs(allowedChannels = []) {
 
   return { adopted, total: Object.keys(managedChannels).length };
 }
+
 export async function ensureOpen(channel, via = "manager") {
   const ch = norm(channel);
   if (!ch) return null;
@@ -245,25 +297,10 @@ export async function ensureOpen(channel, via = "manager") {
     }
   }
 
-    const existing = await findExistingChannelTab(ch);
+  const existing = await findExistingChannelTab(ch);
   if (existing?.id) {
-    ownedTabs[String(existing.id)] = true;
-    managedChannels[ch] = existing.id;
-    await saveManagedState();
-
+    await noteManaged(ch, existing.id, `${via}:adopted_existing`);
     log("ensure_open_adopt_existing", { ch, tabId: existing.id, via });
-
-    if (globalThis.TTM_STAB?.setTab) globalThis.TTM_STAB.setTab(ch, existing.id, `${via}:adopted`);
-    if (globalThis.TTM_STAB?.markAction) globalThis.TTM_STAB.markAction(ch);
-
-    if (globalThis.TTM?.scheduleTabRepokes) {
-      globalThis.TTM.scheduleTabRepokes(existing.id);
-    }
-
-    if (globalThis.TTM?.noteManagedOpen) {
-      globalThis.TTM.noteManagedOpen(ch);
-    }
-
     return existing.id;
   }
 
@@ -294,22 +331,8 @@ export async function ensureOpen(channel, via = "manager") {
 
     const tab = await chrome.tabs.create(createOptions);
 
-    ownedTabs[String(tab.id)] = true;
-    managedChannels[ch] = tab.id;
-    await saveManagedState();
-
+    await noteManaged(ch, tab.id, via);
     log("ensure_open_created", { ch, tabId: tab.id });
-
-    if (globalThis.TTM_STAB?.setTab) globalThis.TTM_STAB.setTab(ch, tab.id, via);
-    if (globalThis.TTM_STAB?.markAction) globalThis.TTM_STAB.markAction(ch);
-
-    if (globalThis.TTM?.scheduleTabRepokes) {
-      globalThis.TTM.scheduleTabRepokes(tab.id);
-    }
-
-    if (globalThis.TTM?.noteManagedOpen) {
-      globalThis.TTM.noteManagedOpen(ch);
-    }
 
     return tab.id;
   } catch (e) {
@@ -325,16 +348,14 @@ export async function ensureClosed(channel) {
   const tabId = managedChannels[ch];
   if (!tabId) return false;
 
-  const isOwned = !!ownedTabs[String(tabId)];
-  if (!isOwned) return false;
+  const isOwnedTab = !!ownedTabs[String(tabId)];
+  if (!isOwnedTab) return false;
 
   try {
     await chrome.tabs.remove(tabId);
   } catch {}
 
-  delete managedChannels[ch];
-  delete ownedTabs[String(tabId)];
-  await saveManagedState();
+  await unnoteManaged(ch, tabId);
   return true;
 }
 
@@ -350,6 +371,7 @@ export async function reconcileTabs(live, cfg) {
   const desired = [];
 
   for (const ch of (live || []).map(norm)) {
+    if (!ch) continue;
     if (!seen.has(ch)) {
       seen.add(ch);
       desired.push(ch);
@@ -364,6 +386,17 @@ export async function reconcileTabs(live, cfg) {
     const bLive = globalThis.TTM_STAB?._get?.(b)?.lastLiveTs || 0;
     return bLive - aLive;
   });
+
+  // First adopt any already-open desired channel tabs so capacity math is correct.
+  for (const ch of desired) {
+    if (managedChannels[ch]) continue;
+
+    const existing = await findExistingChannelTab(ch);
+    if (existing?.id) {
+      await noteManaged(ch, existing.id, "reconcile:adopt_existing_live");
+      log("reconcile_adopt_existing_live", { ch, tabId: existing.id });
+    }
+  }
 
   const desiredAlreadyOpen = await scanOpenDesiredChannels(desired);
   const openSet = new Set([
@@ -381,8 +414,11 @@ export async function reconcileTabs(live, cfg) {
 
   log("reconcile_info", {
     desired: desired.length,
+    desired_channels: desired,
     want: want.length,
+    want_channels: want,
     open_now: openSet.size,
+    managed_now: Object.keys(managedChannels),
     capacity
   });
 
@@ -411,6 +447,8 @@ export async function reconcileTabs(live, cfg) {
         }
 
         log("priority_preempt", { opened: ch, closed });
+      } else {
+        log("priority_preempt_skipped", { wanted: ch });
       }
     } catch (e) {
       log("priority_preempt_error", { login: ch, error: String(e) });
@@ -431,7 +469,26 @@ export async function listManaged() {
   return Object.keys(managedChannels).sort();
 }
 
+export async function listOpenTabs() {
+  try {
+    return await chrome.tabs.query({
+      url: ["*://www.twitch.tv/*", "*://twitch.tv/*"]
+    });
+  } catch {
+    return [];
+  }
+}
+
 try {
+  const T = (globalThis.TTM = globalThis.TTM || {});
+  T.channelFromUrl = chanFromUrl;
+  T.isManaged = isManaged;
+  T.listOpenTabs = listOpenTabs;
+  T.listManaged = listManaged;
+  T.ensureOpen = ensureOpen;
+  T.ensureClosed = ensureClosed;
+  T.adoptOpenTabs = adoptOpenTabs;
+
   if (typeof self === "object") {
     self.bgTabs = self.bgTabs || {};
     self.bgTabs.reconcile = (liveCfg) =>

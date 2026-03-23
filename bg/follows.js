@@ -108,26 +108,61 @@ async function fetchFollowLoginsFromPage(tabId) {
   return uniqNames(result || []);
 }
 
+async function waitForFollowingPage(tabId, timeoutMs = 30000) {
+  return await new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      resolve(false);
+    }, timeoutMs);
+
+    function onUpdated(id, info, tab) {
+      if (id !== tabId) return;
+      const url = tab?.url || tab?.pendingUrl || "";
+      if (info.status !== "complete") return;
+      if (!/\/directory\/following\/channels/i.test(url)) return;
+
+      clearTimeout(timeout);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      resolve(true);
+    }
+
+    chrome.tabs.onUpdated.addListener(onUpdated);
+  });
+}
+
+async function getActiveCurrentWindowTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab || null;
+}
+
 async function fetchMyFollows(mode = "active") {
   let tabId = null;
   let createdTab = false;
+  let restoredOriginalUrl = false;
+  let originalUrl = "";
+  let usedCurrentTab = false;
 
   try {
-    if (mode === "current") {
-      const tabs = await chrome.tabs.query({});
-      const twitchTab = tabs.find((tab) => {
-        const url = tab.url || tab.pendingUrl || "";
-        return /https:\/\/www\.twitch\.tv\//i.test(url);
-      });
+    const targetUrl = "https://www.twitch.tv/directory/following/channels";
 
-      if (!twitchTab?.id) {
-        return { ok: false, error: "No Twitch tab found." };
+    if (mode === "current") {
+      const activeTab = await getActiveCurrentWindowTab();
+      const currentUrl = activeTab?.url || activeTab?.pendingUrl || "";
+
+      if (!activeTab?.id || !/https:\/\/www\.twitch\.tv\//i.test(currentUrl)) {
+        return { ok: false, error: "Your current active tab is not a Twitch tab." };
       }
 
-      tabId = twitchTab.id;
+      tabId = activeTab.id;
+      usedCurrentTab = true;
+      originalUrl = currentUrl;
+
+      if (!/\/directory\/following\/channels/i.test(currentUrl)) {
+        await chrome.tabs.update(tabId, { url: targetUrl });
+      }
     } else {
       const tab = await chrome.tabs.create({
-        url: "https://www.twitch.tv/directory/following/channels",
+        url: targetUrl,
         active: false
       });
 
@@ -135,34 +170,10 @@ async function fetchMyFollows(mode = "active") {
       createdTab = true;
     }
 
-    const targetUrl = "https://www.twitch.tv/directory/following/channels";
-
-    const current = await chrome.tabs.get(tabId);
-    const currentUrl = current?.url || current?.pendingUrl || "";
-
-    if (!/\/directory\/following\/channels/i.test(currentUrl)) {
-      await chrome.tabs.update(tabId, { url: targetUrl });
+    const ready = await waitForFollowingPage(tabId, 30000);
+    if (!ready) {
+      return { ok: false, error: "Timed out waiting for Twitch Following → Channels page." };
     }
-
-    await new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        chrome.tabs.onUpdated.removeListener(onUpdated);
-        resolve();
-      }, 30000);
-
-      function onUpdated(id, info, tab) {
-        if (id !== tabId) return;
-        const url = tab?.url || tab?.pendingUrl || "";
-        if (info.status !== "complete") return;
-        if (!/\/directory\/following\/channels/i.test(url)) return;
-
-        clearTimeout(timeout);
-        chrome.tabs.onUpdated.removeListener(onUpdated);
-        resolve();
-      }
-
-      chrome.tabs.onUpdated.addListener(onUpdated);
-    });
 
     await new Promise((resolve) => setTimeout(resolve, 2500));
 
@@ -172,14 +183,37 @@ async function fetchMyFollows(mode = "active") {
       return { ok: false, error: "No follows were found on the page." };
     }
 
-    return { ok: true, usernames };
+    log("fetch_follows_ok", {
+      mode,
+      usedCurrentTab,
+      count: usernames.length
+    });
+
+    return {
+      ok: true,
+      usernames,
+      mode,
+      used_current_tab: usedCurrentTab,
+      restored_original_url: false
+    };
   } catch (e) {
+    log("fetch_follows_error", { mode, error: String(e) });
     return { ok: false, error: String(e) };
   } finally {
     if (createdTab && tabId != null) {
       try {
         await chrome.tabs.remove(tabId);
       } catch {}
+    }
+
+    if (!createdTab && usedCurrentTab && tabId != null && originalUrl) {
+      try {
+        await chrome.tabs.update(tabId, { url: originalUrl });
+        restoredOriginalUrl = true;
+        log("fetch_follows_restored_tab", { tabId, originalUrl });
+      } catch (e) {
+        log("fetch_follows_restore_error", { tabId, error: String(e) });
+      }
     }
   }
 }

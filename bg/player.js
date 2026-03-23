@@ -4,12 +4,15 @@ const T = (globalThis.TTM = globalThis.TTM || {});
 
 const TTM_REPOKE_ALARM = "ttm-repoke";
 const REPOKE_DELAYS_MS = [1500, 4500, 9000, 15000, 30000, 60000];
+
 const SOFT_WAKE_MIN_STUCK_MS = 12000;
 const SOFT_WAKE_COOLDOWN_MS = 60000;
-const SOFT_WAKE_TAB_MS = 900;
+const BACKGROUND_RELOAD_MIN_STUCK_MS = 30000;
+const BACKGROUND_RELOAD_COOLDOWN_MS = 3 * 60 * 1000;
 
 const playerStatusByTab = new Map();
 const softWakeByTab = new Map();
+const backgroundReloadByTab = new Map();
 
 globalThis.__TTM_PLAYER_STATUS_MAP__ = playerStatusByTab;
 
@@ -26,14 +29,16 @@ function getPlayerStatus(tabId) {
   return playerStatusByTab.get(tabId) || null;
 }
 
-async function pokeChannelTab(tabId) {
+async function injectHelpers(tabId) {
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
       files: ["content_unmute.js", "content_status.js"]
     });
   } catch {}
+}
 
+async function sendEnforce(tabId) {
   try {
     await chrome.tabs.sendMessage(tabId, {
       type: "TTM_ENFORCE",
@@ -47,6 +52,11 @@ async function pokeChannelTab(tabId) {
   } catch {}
 }
 
+async function pokeChannelTab(tabId) {
+  await injectHelpers(tabId);
+  await sendEnforce(tabId);
+}
+
 function scheduleTabRepokes(tabId) {
   for (const delay of REPOKE_DELAYS_MS) {
     setTimeout(async () => {
@@ -58,12 +68,9 @@ function scheduleTabRepokes(tabId) {
   }
 }
 
-function shouldSoftWake(tabId) {
-  if (!state.settings.soft_wake_tabs) return false;
-
+function getBadStateInfo(tabId) {
   const status = getPlayerStatus(tabId);
-  if (!status) return false;
-  if (status.adPlaying) return false;
+  if (!status) return { status: null, isBad: false, firstSeenBadAt: 0 };
 
   const isBad =
     !status.hasVideo ||
@@ -71,14 +78,43 @@ function shouldSoftWake(tabId) {
     !!status.muted ||
     !!status.stalledStart;
 
+  const firstSeenBadAt = Number(status.firstSeenBadAt || 0);
+
+  return { status, isBad, firstSeenBadAt };
+}
+
+function shouldSoftWake(tabId) {
+  if (!state.settings.soft_wake_tabs) return false;
+
+  const { status, isBad, firstSeenBadAt } = getBadStateInfo(tabId);
+  if (!status) return false;
+  if (status.adPlaying) return false;
   if (!isBad) return false;
 
   const now = Date.now();
-  const firstSeenBadAt = status.firstSeenBadAt || now;
+  const seenBadAt = firstSeenBadAt || now;
   const lastWakeAt = softWakeByTab.get(tabId) || 0;
 
-  if (now - firstSeenBadAt < SOFT_WAKE_MIN_STUCK_MS) return false;
+  if (now - seenBadAt < SOFT_WAKE_MIN_STUCK_MS) return false;
   if (now - lastWakeAt < SOFT_WAKE_COOLDOWN_MS) return false;
+
+  return true;
+}
+
+function shouldBackgroundReload(tabId) {
+  if (!state.settings.soft_wake_tabs) return false;
+
+  const { status, isBad, firstSeenBadAt } = getBadStateInfo(tabId);
+  if (!status) return false;
+  if (status.adPlaying) return false;
+  if (!isBad) return false;
+
+  const now = Date.now();
+  const seenBadAt = firstSeenBadAt || now;
+  const lastReloadAt = backgroundReloadByTab.get(tabId) || 0;
+
+  if (now - seenBadAt < BACKGROUND_RELOAD_MIN_STUCK_MS) return false;
+  if (now - lastReloadAt < BACKGROUND_RELOAD_COOLDOWN_MS) return false;
 
   return true;
 }
@@ -98,41 +134,49 @@ async function canSoftWakeWithoutStealingFromOtherApps() {
 async function softWakeTab(tabId) {
   if (!(await canSoftWakeWithoutStealingFromOtherApps())) return false;
 
-  let currentActiveTabId = null;
-  let currentWindowId = null;
-
   try {
-    const activeTabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    currentActiveTabId = activeTabs?.[0]?.id ?? null;
-    currentWindowId = activeTabs?.[0]?.windowId ?? null;
-
-    const targetTab = await chrome.tabs.get(tabId);
-    const targetWindowId = targetTab?.windowId ?? null;
-    if (!targetWindowId) return false;
-
-    await chrome.windows.update(targetWindowId, { focused: true });
-    await chrome.tabs.update(tabId, { active: true });
+    // Hands-off only: re-inject + re-enforce without focusing windows/tabs
     await pokeChannelTab(tabId);
 
-    await new Promise((resolve) => setTimeout(resolve, SOFT_WAKE_TAB_MS));
-
-    if (currentActiveTabId != null) {
-      if (currentWindowId != null) {
-        try {
-          await chrome.windows.update(currentWindowId, { focused: true });
-        } catch {}
-      }
-
-      try {
-        await chrome.tabs.update(currentActiveTabId, { active: true });
-      } catch {}
-    }
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        world: "MAIN",
+        func: () => {
+          try {
+            document.dispatchEvent(new Event("visibilitychange"));
+            window.dispatchEvent(new Event("focus"));
+            window.dispatchEvent(new Event("pageshow"));
+          } catch {}
+        }
+      });
+    } catch {}
 
     softWakeByTab.set(tabId, Date.now());
-    log("soft_wake_ok", { tabId });
+    log("soft_wake_ok", { tabId, mode: "hands_off" });
     return true;
   } catch (e) {
     log("soft_wake_error", { tabId, error: String(e) });
+    return false;
+  }
+}
+
+async function backgroundReloadTab(tabId) {
+  if (!(await canSoftWakeWithoutStealingFromOtherApps())) return false;
+
+  try {
+    await chrome.tabs.reload(tabId);
+    backgroundReloadByTab.set(tabId, Date.now());
+    log("soft_wake_background_reload", { tabId });
+
+    setTimeout(() => {
+      pokeChannelTab(tabId).catch(() => {});
+      scheduleTabRepokes(tabId);
+    }, 2500);
+
+    return true;
+  } catch (e) {
+    log("soft_wake_background_reload_error", { tabId, error: String(e) });
     return false;
   }
 }
@@ -166,6 +210,10 @@ async function reviewManagedTabsForSoftWake() {
 
       if (shouldSoftWake(tab.id)) {
         await softWakeTab(tab.id);
+      }
+
+      if (shouldBackgroundReload(tab.id)) {
+        await backgroundReloadTab(tab.id);
       }
     }
   } catch (e) {

@@ -35,6 +35,31 @@ function redactForDiag(input) {
   return value;
 }
 
+function getTabLogin(tab) {
+  const raw = String(tab?.url || tab?.pendingUrl || "");
+  try {
+    const u = new URL(raw);
+    if (!/^(www\.)?twitch\.tv$/i.test(u.hostname)) return "";
+    const first = u.pathname.replace(/^\/+/, "").split("/")[0] || "";
+    if (!first) return "";
+    if ([
+      "directory",
+      "downloads",
+      "jobs",
+      "p",
+      "settings",
+      "subscriptions",
+      "inventory",
+      "wallet"
+    ].includes(first.toLowerCase())) {
+      return "";
+    }
+    return first.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
 export async function diagnose() {
   const s = state.settings || {};
 
@@ -67,6 +92,34 @@ export async function diagnose() {
     }))
     .filter((x) => x.stalledStart);
 
+  const liveChannels = Array.isArray(state.lastLive) ? state.lastLive.slice() : [];
+  const trackedOpenChannels = Array.isArray(state.openChannels) ? state.openChannels.slice() : [];
+
+  const managedOpenDetails = managedOpen.map((t) => ({
+    id: t.id,
+    login: getTabLogin(t),
+    title: t.title || "",
+    url: t.url || "",
+    pendingUrl: t.pendingUrl || "",
+    audible: !!t.audible,
+    discarded: !!t.discarded,
+    active: !!t.active,
+    status: t.status || ""
+  }));
+
+  const allOpenTwitchTabs = openTabs.map((t) => ({
+    id: t.id,
+    login: getTabLogin(t),
+    managed: !!isManaged(t),
+    title: t.title || "",
+    url: t.url || "",
+    pendingUrl: t.pendingUrl || "",
+    audible: !!t.audible,
+    discarded: !!t.discarded,
+    active: !!t.active,
+    status: t.status || ""
+  }));
+
   return {
     ok: true,
     settings: redactForDiag({
@@ -87,15 +140,23 @@ export async function diagnose() {
       priority_count: Array.isArray(s.priority) ? s.priority.length : 0,
       followUnion_count: Array.isArray(s.followUnion) ? s.followUnion.length : 0,
       blacklist_count: Array.isArray(s.blacklist) ? s.blacklist.length : 0,
+      follows: Array.isArray(s.follows) ? s.follows.slice() : [],
+      priority: Array.isArray(s.priority) ? s.priority.slice() : [],
+      followUnion: Array.isArray(s.followUnion) ? s.followUnion.slice() : [],
+      blacklist: Array.isArray(s.blacklist) ? s.blacklist.slice() : [],
       client_id: s.client_id,
       access_token: s.access_token
     }),
     loading: !!state.loading,
     live_count: Number(state.lastLiveCount || 0),
+    live_channels: liveChannels,
     open_count: managedOpen.length,
+    open_channels: managedOpenDetails,
+    tracked_open_channels: trackedOpenChannels,
+    all_open_twitch_tabs: allOpenTwitchTabs,
     capacity: Math.max(0, (Number(s.max_tabs || 0) || 0) - managedOpen.length),
     stalled_tabs: stalledTabs,
-    logs: Array.isArray(state.logs) ? state.logs.slice(-20) : []
+    logs: Array.isArray(state.logs) ? state.logs.slice(-100) : []
   };
 }
 
